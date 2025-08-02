@@ -420,6 +420,26 @@ const App = () => {
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
 
+  const generateImage = useCallback(async (prompt: string): Promise<string> => {
+    try {
+        const response = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-002',
+            prompt: `fantasy art, digital painting. ${prompt}`,
+            config: {
+                numberOfImages: 1,
+                outputMimeType: 'image/jpeg',
+                aspectRatio: '16:9',
+                safetySettings: safetySettings,
+            },
+        });
+        const base64ImageBytes = response.generatedImages[0].image.imageBytes;
+        return `data:image/jpeg;base64,${base64ImageBytes}`;
+    } catch (error) {
+        console.error("Image generation failed:", error);
+        return "";
+    }
+  }, []);
+
   const handleNewGame = useCallback(() => {
     localStorage.removeItem('endlessAdventureSave');
     setCreationData(null);
@@ -470,7 +490,7 @@ const App = () => {
     };
 
     loadGame();
-  }, [generateImage, handleNewGame]); // Dependency array now includes generateImage
+  }, [generateImage, handleNewGame]);
 
   // Save to localStorage on change
   useEffect(() => {
@@ -492,27 +512,6 @@ const App = () => {
       localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
     }
   }, [gameState, creationData]);
-
-
-  const generateImage = useCallback(async (prompt: string): Promise<string> => {
-    try {
-        const response = await ai.models.generateImages({
-            model: 'imagen-3.0-generate-002',
-            prompt: `fantasy art, digital painting. ${prompt}`,
-            config: {
-                numberOfImages: 1,
-                outputMimeType: 'image/jpeg',
-                aspectRatio: '16:9',
-                safetySettings: safetySettings,
-            },
-        });
-        const base64ImageBytes = response.generatedImages[0].image.imageBytes;
-        return `data:image/jpeg;base64,${base64ImageBytes}`;
-    } catch (error) {
-        console.error("Image generation failed:", error);
-        return "";
-    }
-  }, []);
 
   const handleCreateCharacter = useCallback(async (details: CreationDetails) => {
     setApiIsLoading(true);
