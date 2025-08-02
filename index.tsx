@@ -51,6 +51,15 @@ interface Companion {
   relationship: number; // A score from -100 to 100 representing their view of the player
 }
 
+const CAMPAIGN_TYPES = [
+  "Revenge Story", "Romantic Conquest", "World War", "Monster Hunt",
+  "Political Intrigue", "Guild Rivalry", "Lost Heir", "Cursed Land",
+  "Ancient Prophecy", "Exploration and Discovery", "Defend the Realm", "Heist",
+  "Magical Tournament", "Survive the Apocalypse", "Solve a Mystery", "Uprising Against Tyranny",
+  "Thieves' Guild Initiation", "Royal Escort Mission", "Artifact Recovery", "Establish a Colony",
+  "Gladiator Arena", "Spy Thriller", "Cosmic Horror", "Time Travel Paradox"
+];
+
 interface GameState {
   character: Character | null;
   companions: Companion[];
@@ -84,6 +93,7 @@ interface CreationDetails {
     race: string;
     characterClass: string;
     background: string;
+    campaign: string; 
 }
 
 
@@ -101,7 +111,7 @@ const characterGenSchema = {
       },
       required: ['name', 'description']
     },
-    companions: { // CHANGE 'companion' to 'companions'
+    companions: {
       type: Type.ARRAY,
       description: "An array of 1-2 starting companions for the player's party. Give each a unique name, description, personality, and skills.",
       items: {
@@ -111,9 +121,22 @@ const characterGenSchema = {
           description: { type: Type.STRING },
           personality: { type: Type.STRING },
           skills: {
-            type: Type.OBJECT,
-            description: "An object of key-value pairs for the companion's skills and their levels.",
-            // ... properties for skillName and level
+            type: Type.ARRAY,
+            description: "An array of objects, where each object represents a skill and its level.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    skillName: { 
+                        type: Type.STRING,
+                        description: "The name of the skill (e.g., 'Swords', 'Alchemy')."
+                    },
+                    level: {
+                        type: Type.INTEGER,
+                        description: "The level of the skill."
+                    }
+                },
+                required: ['skillName', 'level']
+            }
           }
         },
         required: ['name', 'description', 'personality', 'skills']
@@ -177,11 +200,29 @@ const nextStepSchema = {
                     type: Type.OBJECT,
                     description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null.",
                     nullable: true,
-                    properties: { // This structure matches the Companion interface
+                    properties: { 
                         name: { type: Type.STRING },
                         description: { type: Type.STRING },
                         personality: { type: Type.STRING },
-                        skills: { type: Type.OBJECT }
+                        // REPLACE the old 'skills' definition with this one:
+                        skills: {
+                            type: Type.ARRAY,
+                            description: "An array of objects, where each object represents a skill and its level.",
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    skillName: { 
+                                        type: Type.STRING,
+                                        description: "The name of the skill."
+                                    },
+                                    level: {
+                                        type: Type.INTEGER,
+                                        description: "The level of the skill."
+                                    }
+                                },
+                                required: ['skillName', 'level']
+                            }
+                        }
                     },
                 },
                 reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } },
@@ -266,11 +307,12 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
   const [race, setRace] = useState(RACES[0]);
   const [characterClass, setCharacterClass] = useState(CLASSES[0]);
   const [background, setBackground] = useState(BACKGROUNDS[0]);
+  const [campaign, setCampaign] = useState(CAMPAIGN_TYPES[0]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (name.trim()) {
-      onCreate({ name: name.trim(), gender, race, characterClass, background });
+      onCreate({ name: name.trim(), gender, race, characterClass, background, campaign });
     }
   };
 
@@ -310,14 +352,23 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
                     {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
             </div>
+
+            <div className="form-group">
+                <label htmlFor="background-select">Background</label>
+                 <select id="background-select" value={background} onChange={e => setBackground(e.target.value)} disabled={isLoading}>
+                    {BACKGROUNDS.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+            </div>
+
+            <div className="form-group">
+                <label htmlFor="campaign-select">Campaign Type</label>
+                <select id="campaign-select" value={campaign} onChange={e => setCampaign(e.target.value)} disabled={isLoading}>
+                    {CAMPAIGN_TYPES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+            </div>
         </div>
         
-        <div className="form-group">
-            <label htmlFor="background-select">Background</label>
-             <select id="background-select" value={background} onChange={e => setBackground(e.target.value)} disabled={isLoading}>
-                {BACKGROUNDS.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
-        </div>
+        
 
 
         <button type="submit" disabled={isLoading || !name.trim()}>
@@ -663,8 +714,9 @@ const App = () => {
             - Race: ${race}
             - Class: ${characterClass}
             - Background: ${background}
+            - Desired Campaign Type: ${campaign}
 
-            Base the character's description, the initial story, and the available skill pools on these attributes. For example, a 'Noble' 'Knight' might start in a castle, whereas a 'Farmer' 'Ranger' might start in the wilderness. The skills should reflect their class and background. Ensure the character description is detailed and suitable for generating a portrait.
+            Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
         `;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -678,10 +730,20 @@ const App = () => {
 
         const data = JSON.parse(response.text);
 
-        const initialCompanions: Companion[] = data.companions.map(comp => ({
-            ...comp,
-            relationship: 0 // Start all companions at a neutral relationship
-        }));
+        const initialCompanions: Companion[] = data.companions.map((comp: any) => {
+            // Transform the skills array from the API into a key-value object
+            const skillsObject = comp.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
+                acc[skill.skillName] = skill.level;
+                return acc;
+            }, {});
+
+            return {
+                ...comp,
+                skills: skillsObject, // Replace the array with the new object
+                relationship: 0
+            };
+        });
+
         
         setCreationData({
             name: data.character.name,
@@ -840,9 +902,16 @@ const App = () => {
             // (We assume an action like "Recruit [name]" would trigger this)
             if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                  if (updatedCompanions.length < 5) {
+                    // Transform the skills array into a key-value object
+                    const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
+                        acc[skill.skillName] = skill.level;
+                        return acc;
+                    }, {});
+
                      const companionToAdd: Companion = {
                          ...data.newCompanion,
-                         relationship: 20 // Give a starting relationship boost for joining
+                         skills: skillsObject, // Use the transformed skills object
+                         relationship: 20 
                      };
                      updatedCompanions.push(companionToAdd);
                  }
