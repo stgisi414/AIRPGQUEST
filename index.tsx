@@ -25,6 +25,7 @@ const safetySettings = [
 // --- TYPE DEFINITIONS ---
 interface Character {
   name: string;
+  gender: string;
   hp: number;
   xp: number;
   skills: { [key: string]: number };
@@ -56,6 +57,7 @@ interface GameState {
 // Data stored before character is finalized
 interface CreationData {
     name: string;
+    gender: string;
     description: string;
     storyGuidance: GameState['storyGuidance'];
     initialStory: { text: string; actions: string[] };
@@ -340,12 +342,55 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
 };
 
 const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void}) => {
+    const [isSpeaking, setIsSpeaking] = useState(false);
+
     if (!gameState.character || gameState.storyLog.length === 0) {
         return <Loader text="Loading game..." />;
     }
 
     const { character, storyLog, currentActions } = gameState;
     const currentScene = storyLog[storyLog.length - 1];
+
+    useEffect(() => {
+        // Ensure voices are loaded. This is sometimes necessary for browsers.
+        speechSynthesis.onvoiceschanged = () => {};
+        // When the scene changes or component unmounts, stop any ongoing speech.
+        return () => {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.cancel();
+                setIsSpeaking(false);
+            }
+        };
+    }, [currentScene]);
+
+
+    const handlePlayAudio = (text: string, gender: string) => {
+        if (speechSynthesis.speaking) {
+            speechSynthesis.cancel();
+            setIsSpeaking(false);
+            return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = speechSynthesis.getVoices();
+        let selectedVoice = null;
+
+        if (gender === 'Male') {
+            selectedVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Male')) || voices.find(v => v.lang.startsWith('en'));
+        } else { // Female
+            selectedVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Female')) || voices.find(v => v.lang.startsWith('en'));
+        }
+
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+        
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+
+        speechSynthesis.speak(utterance);
+    };
 
     return (
         <div className="game-container">
@@ -387,6 +432,13 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                        <img src={currentScene.illustration} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
                     </div>
                     <div className="story-text">
+                        <button
+                            className="play-audio-btn"
+                            onClick={() => handlePlayAudio(currentScene.text, character.gender)}
+                            aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
+                        >
+                            {isSpeaking ? '⏹️' : '▶️'}
+                        </button>
                         <p>{currentScene.text}</p>
                     </div>
                     <div className="actions-panel">
@@ -545,6 +597,7 @@ const App = () => {
         
         setCreationData({
             name: data.character.name,
+            gender: details.gender,
             description: data.character.description,
             storyGuidance: data.storyGuidance,
             initialStory: data.initialStory,
@@ -574,6 +627,7 @@ const App = () => {
 
         const newCharacter: Character = {
             name: creationData.name,
+            gender: creationData.gender,
             hp: 100,
             xp: 0,
             skills: chosenSkills,
