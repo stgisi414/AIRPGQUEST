@@ -3,6 +3,25 @@ import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 import './game.css';
 
+const safetySettings = [
+    {
+        category: 'HARM_CATEGORY_HARASSMENT',
+        threshold: 'BLOCK_NONE',
+    },
+    {
+        category: 'HARM_CATEGORY_HATE_SPEECH',
+        threshold: 'BLOCK_NONE',
+    },
+    {
+        category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        threshold: 'BLOCK_NONE',
+    },
+    {
+        category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+        threshold: 'BLOCK_NONE',
+    },
+];
+
 // --- TYPE DEFINITIONS ---
 interface Character {
   name: string;
@@ -424,6 +443,7 @@ const App = () => {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
                 aspectRatio: '16:9',
+                safetySettings: safetySettings,
             },
         });
         const base64ImageBytes = response.generatedImages[0].image.imageBytes;
@@ -458,6 +478,7 @@ const App = () => {
             config: {
                 responseMimeType: "application/json",
                 responseSchema: characterGenSchema,
+                safetySettings: safetySettings,
             },
         });
 
@@ -555,6 +576,7 @@ const App = () => {
             config: {
                 responseMimeType: "application/json",
                 responseSchema: nextStepSchema,
+                safetySettings: safetySettings,
             },
         });
         
