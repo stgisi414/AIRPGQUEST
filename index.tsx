@@ -147,7 +147,7 @@ const characterGenSchema = {
     },
     startingSkillPoints: { type: Type.INTEGER, description: "The number of points the player can initially spend on skills. Usually 5-7."}
   },
-  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companion']
+  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companions']
 };
 
 
