@@ -541,8 +541,8 @@ const App = () => {
     storyGuidance: null,
     skillPools: null,
     gameStatus: 'initial_load',
-    weather: 'Clear Skies', // Add default weather
-    timeOfDay: 'Morning',   // Add default time of day
+    weather: 'Clear Skies',
+    timeOfDay: 'Morning',
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
@@ -569,19 +569,21 @@ const App = () => {
   }, []);
 
   const handleNewGame = useCallback(() => {
-    localStorage.removeItem('endlessAdventureSave');
-    setCreationData(null);
-    setGameState({
+      localStorage.removeItem('endlessAdventureSave');
+      setCreationData(null);
+      setGameState(prevState => ({
+        ...prevState, // Keep existing state properties
         character: null,
+        companions: [],
         storyLog: [],
         currentActions: [],
         storyGuidance: null,
         skillPools: null,
-        weather: 'Clear Skies', // A sensible default
-        timeOfDay: 'Morning', // A sensible default
+        weather: 'Clear Skies',
+        timeOfDay: 'Morning',
         gameStatus: 'characterCreation',
-    });
-  }, []);
+      }));
+  }, [setGameState, setCreationData]); // Add dependencies
 
   // Load from localStorage on startup
   useEffect(() => {
