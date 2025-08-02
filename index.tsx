@@ -33,6 +33,7 @@ interface Character {
   description: string;
   portrait: string; // base64 image
   storySummary?: string;
+  reputation: { [key: string]: number };
 }
 
 interface StorySegment {
@@ -42,8 +43,17 @@ interface StorySegment {
 
 type SkillPools = { [key: string]: string[] };
 
+interface Companion {
+  name: string;
+  description: string;
+  skills: { [key: string]: number };
+  personality: string; // e.g., "Loyal but cautious," "Brave and reckless"
+  relationship: number; // A score from -100 to 100 representing their view of the player
+}
+
 interface GameState {
   character: Character | null;
+  companions: Companion[];
   storyLog: StorySegment[];
   currentActions: string[];
   storyGuidance: {
@@ -52,6 +62,8 @@ interface GameState {
   } | null;
   skillPools: SkillPools | null;
   gameStatus: 'characterCreation' | 'characterCustomize' | 'levelUp' | 'playing' | 'loading' | 'initial_load';
+  weather: string;
+  timeOfDay: string;
 }
 
 // Data stored before character is finalized
@@ -89,6 +101,24 @@ const characterGenSchema = {
       },
       required: ['name', 'description']
     },
+    companions: { // CHANGE 'companion' to 'companions'
+      type: Type.ARRAY,
+      description: "An array of 1-2 starting companions for the player's party. Give each a unique name, description, personality, and skills.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          description: { type: Type.STRING },
+          personality: { type: Type.STRING },
+          skills: {
+            type: Type.OBJECT,
+            description: "An object of key-value pairs for the companion's skills and their levels.",
+            // ... properties for skillName and level
+          }
+        },
+        required: ['name', 'description', 'personality', 'skills']
+      }
+    },
     storyGuidance: {
       type: Type.OBJECT,
       properties: {
@@ -117,7 +147,7 @@ const characterGenSchema = {
     },
     startingSkillPoints: { type: Type.INTEGER, description: "The number of points the player can initially spend on skills. Usually 5-7."}
   },
-  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints']
+  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companion']
 };
 
 
@@ -130,9 +160,35 @@ const nextStepSchema = {
                 text: { type: Type.STRING, description: "The next paragraph of the story, describing the outcome of the player's action."},
                 actions: { type: Type.ARRAY, items: { type: Type.STRING }, description: "A new array of 3-4 actions the player can take now."},
                 didHpChange: { type: Type.INTEGER, description: "The number of HP points the character gained or lost (e.g., -10 or 5). Should be 0 if no change."},
-                didXpChange: { type: Type.INTEGER, description: "The number of XP points the character gained. Should be 0 if no change."}
+                didXpChange: { type: Type.INTEGER, description: "The number of XP points the character gained. Should be 0 if no change."},
+                companionUpdates: {
+                    type: Type.ARRAY,
+                    description: "An array of updates for companions. Includes relationship changes.",
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING, description: "The name of the companion to update." },
+                            relationshipChange: { type: Type.INTEGER, description: "How much the relationship score changed." }
+                        },
+                        required: ['name', 'relationshipChange']
+                    }
+                },
+                newCompanion: {
+                    type: Type.OBJECT,
+                    description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null.",
+                    nullable: true,
+                    properties: { // This structure matches the Companion interface
+                        name: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        personality: { type: Type.STRING },
+                        skills: { type: Type.OBJECT }
+                    },
+                },
+                reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } }
+                newWeather: { type: Type.STRING, description: "The new weather condition (e.g., 'Clear Skies', 'Light Rain', 'Snowing')." },
+                newTimeOfDay: { type: Type.STRING, description: "The new time of day (e.g., 'Morning', 'Afternoon', 'Night')." }
             },
-            required: ['text', 'actions', 'didHpChange', 'didXpChange']
+            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
         }
     },
     required: ['story']
@@ -425,6 +481,19 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                             <li key={skill}>{skill} <span className="skill-level">Lvl {level}</span></li>
                         ))}
                     </ul>
+
+
+                    <h3>Party</h3>
+                    <ul className="skills-list">
+                        {gameState.companions.map(companion => (
+                            <li key={companion.name}>
+                                <span>{companion.name}</span>
+                                <span className="skill-level" title={`Relationship: ${companion.relationship}`}>
+                                    {companion.relationship >= 50 ? 'Ally' : companion.relationship <= -50 ? 'Rival' : 'Neutral'}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
                 </div>
                 <div className="story-panel">
                     <div className="illustration-container">
@@ -501,6 +570,8 @@ const App = () => {
         currentActions: [],
         storyGuidance: null,
         skillPools: null,
+        weather: 'Clear Skies', // A sensible default
+        timeOfDay: 'Morning', // A sensible default
         gameStatus: 'characterCreation',
     });
   }, []);
@@ -594,6 +665,11 @@ const App = () => {
         });
 
         const data = JSON.parse(response.text);
+
+        const initialCompanions: Companion[] = data.companions.map(comp => ({
+            ...comp,
+            relationship: 0 // Start all companions at a neutral relationship
+        }));
         
         setCreationData({
             name: data.character.name,
@@ -604,7 +680,7 @@ const App = () => {
             skillPools: data.skillPools,
             startingSkillPoints: data.startingSkillPoints
         });
-        setGameState(g => ({...g, gameStatus: 'characterCustomize'}));
+        setGameState(g => ({...g, companions: initialCompanions, gameStatus: 'characterCustomize'}));
 
     } catch (error) {
         console.error("Character creation failed:", error);
@@ -633,11 +709,13 @@ const App = () => {
             skills: chosenSkills,
             skillPoints: 0,
             description: creationData.description,
-            portrait: portrait
+            portrait: portrait,
+            reputation: {}
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
 
-        setGameState({
+        setGameState(prevState => ({
+            ...prevState,
             character: newCharacter,
             storyGuidance: creationData.storyGuidance,
             skillPools: creationData.skillPools,
@@ -662,16 +740,26 @@ const App = () => {
 
       try {
           const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+          const companionsDetails = gameState.companions.map(c =>
+            `  - Name: ${c.name}, Personality: ${c.personality}, Relationship: ${c.relationship}`
+          ).join('\n');
           const prompt = `
             Continue this text adventure.
             STORY GUIDANCE:
             Setting: ${gameState.storyGuidance.setting}
             Plot: ${gameState.storyGuidance.plot}
 
+            CURRENT CONDITIONS:
+            Time of Day: ${gameState.timeOfDay}
+            Weather: ${gameState.weather}
+
             CHARACTER:
             Name: ${gameState.character.name}
             HP: ${gameState.character.hp}
             XP: ${gameState.character.xp}
+            Reputation: ${JSON.stringify(gameState.character.reputation)}
+            Companions:
+            ${companionsDetails}
             Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
             Description: ${gameState.character.description}
 
@@ -688,6 +776,8 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
+            Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
+
           `;
 
         const response = await ai.models.generateContent({
@@ -709,18 +799,51 @@ const App = () => {
             const oldXp = prevState.character.xp;
             const newXp = oldXp + data.didXpChange;
             const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
-
+            const newReputation = { ...prevState.character.reputation };
+            if (data.reputationChange) {
+                for (const [faction, change] of Object.entries(data.reputationChange)) {
+                    newReputation[faction] = (newReputation[faction] || 0) + change;
+                }
+            }
             const updatedCharacter = {
                 ...prevState.character,
                 hp: prevState.character.hp + data.didHpChange,
                 xp: newXp,
-                skillPoints: prevState.character.skillPoints + earnedSkillPoints
+                skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                reputation: newReputation
             };
+
+
+            const updatedCompanions = [...prevState.companions];
+            if (data.companionUpdates) {
+                for (const update of data.companionUpdates) {
+                    const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
+                    if (companionIndex !== -1) {
+                        updatedCompanions[companionIndex].relationship += update.relationshipChange;
+                    }
+                }
+            }
+
+            // Handle adding a new companion if one was generated and recruited
+            // (We assume an action like "Recruit [name]" would trigger this)
+            if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
+                 if (updatedCompanions.length < 5) {
+                     const companionToAdd: Companion = {
+                         ...data.newCompanion,
+                         relationship: 20 // Give a starting relationship boost for joining
+                     };
+                     updatedCompanions.push(companionToAdd);
+                 }
+            }
+
             return {
                 ...prevState,
                 character: updatedCharacter,
+                companions: updatedCompanions,
+                weather: data.newWeather,
+                timeOfDay: data.newTimeOfDay,
                 storyLog: [...prevState.storyLog, newSegment].slice(-100),
-                currentActions: data.actions
+                currentActions: data.actions,
             };
         });
 
