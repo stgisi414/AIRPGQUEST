@@ -184,7 +184,7 @@ const nextStepSchema = {
                         skills: { type: Type.OBJECT }
                     },
                 },
-                reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } }
+                reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } },
                 newWeather: { type: Type.STRING, description: "The new weather condition (e.g., 'Clear Skies', 'Light Rain', 'Snowing')." },
                 newTimeOfDay: { type: Type.STRING, description: "The new time of day (e.g., 'Morning', 'Afternoon', 'Night')." }
             },
@@ -722,7 +722,7 @@ const App = () => {
             storyLog: [initialSegment],
             currentActions: creationData.initialStory.actions,
             gameStatus: 'playing'
-        });
+        }));
         setCreationData(null); // Clean up temp data
 
      } catch (error) {
