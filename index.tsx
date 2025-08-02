@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, FormEvent } from "react";
+    import React, { useState, useEffect, useCallback, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 import './game.css';
@@ -187,7 +187,7 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
 
   return (
     <div className="creation-container">
-      <h1>Endless Adventure</h1>
+      <h1><img src="ea-logo.png" />&nbsp;Endless Adventure</h1>
       <p>Welcome, traveler. A new world of adventure awaits. Define your hero, and the saga will begin.</p>
       <form onSubmit={handleSubmit} className="creation-form">
         <input
