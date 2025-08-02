@@ -338,7 +338,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
     return (
         <div className="game-container">
             <header className="game-header">
-                <h1>Endless Adventure</h1>
+                <h1><img src="/ea-logo.png" />&nbsp;Endless Adventure</h1>
                 <button onClick={onNewGame} className="new-game-btn">Start New Game</button>
             </header>
             <main className="game-main">

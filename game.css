@@ -147,8 +147,19 @@ select:focus, .creation-form select:focus {
 }
 
 .game-header h1 {
+    display: flex;
+    align-items: center; /* This vertically centers the text with the logo */
+    justify-content: center; /* This keeps the combined logo and text centered */
     margin: 0;
     font-size: 2rem;
+}
+
+.game-header h1 img {
+    margin-right: 1rem; /* Adds some space between the logo and the title */
+    height: 4rem; /* Adjust the height of the logo to match the font size */
+    width: auto; /* Maintain aspect ratio */
+    border-radius: 360px;
+    border: 2px solid #a47b37;
 }
 
 .new-game-btn {
