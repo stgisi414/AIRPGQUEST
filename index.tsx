@@ -485,14 +485,18 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
 
                     <h3>Party</h3>
                     <ul className="skills-list">
-                        {gameState.companions.map(companion => (
-                            <li key={companion.name}>
-                                <span>{companion.name}</span>
-                                <span className="skill-level" title={`Relationship: ${companion.relationship}`}>
-                                    {companion.relationship >= 50 ? 'Ally' : companion.relationship <= -50 ? 'Rival' : 'Neutral'}
-                                </span>
-                            </li>
-                        ))}
+                        {gameState.companions && gameState.companions.length > 0 ? (
+                            gameState.companions.map(companion => (
+                                <li key={companion.name}>
+                                    <span>{companion.name}</span>
+                                    <span className="skill-level" title={`Relationship: ${companion.relationship}`}>
+                                        {companion.relationship >= 50 ? 'Ally' : companion.relationship <= -50 ? 'Rival' : 'Neutral'}
+                                    </span>
+                                </li>
+                            ))
+                        ) : (
+                            <li>No party members yet.</li>
+                        )}
                     </ul>
                 </div>
                 <div className="story-panel">
@@ -531,6 +535,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
 const App = () => {
   const [gameState, setGameState] = useState<GameState>({
     character: null,
+    companions: [],
     storyLog: [],
     currentActions: [],
     storyGuidance: null,
