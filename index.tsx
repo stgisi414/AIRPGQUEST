@@ -1,4 +1,4 @@
-    import React, { useState, useEffect, useCallback, FormEvent } from "react";
+import React, { useState, useEffect, useCallback, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 import './game.css';
@@ -420,6 +420,19 @@ const App = () => {
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
 
+  const handleNewGame = useCallback(() => {
+    localStorage.removeItem('endlessAdventureSave');
+    setCreationData(null);
+    setGameState({
+        character: null,
+        storyLog: [],
+        currentActions: [],
+        storyGuidance: null,
+        skillPools: null,
+        gameStatus: 'characterCreation',
+    });
+  }, []);
+
   // Load from localStorage on startup
   useEffect(() => {
     const loadGame = async () => {
@@ -457,21 +470,7 @@ const App = () => {
     };
 
     loadGame();
-  }, [generateImage]); // Dependency array now includes generateImage
-
-  // Also, wrap handleNewGame in useCallback for stability
-  const handleNewGame = useCallback(() => {
-    localStorage.removeItem('endlessAdventureSave');
-    setCreationData(null);
-    setGameState({
-        character: null,
-        storyLog: [],
-        currentActions: [],
-        storyGuidance: null,
-        skillPools: null,
-        gameStatus: 'characterCreation',
-    });
-  }, []);
+  }, [generateImage, handleNewGame]); // Dependency array now includes generateImage
 
   // Save to localStorage on change
   useEffect(() => {
@@ -561,7 +560,7 @@ const App = () => {
     } finally {
         setApiIsLoading(false);
     }
-  }, []);
+  }, [handleNewGame]);
 
   const handleFinalizeCharacter = useCallback(async (chosenSkills: {[key: string]: number}) => {
      if (!creationData) return;
@@ -601,7 +600,7 @@ const App = () => {
      } finally {
          setApiIsLoading(false);
      }
-  }, [creationData, generateImage]);
+  }, [creationData, generateImage, handleNewGame]);
 
 
   const handleAction = useCallback(async (action: string) => {
@@ -749,19 +748,6 @@ const App = () => {
         }
       });
   };
-
-  const handleNewGame = () => {
-    localStorage.removeItem('endlessAdventureSave');
-    setCreationData(null);
-    setGameState({
-        character: null,
-        storyLog: [],
-        currentActions: [],
-        storyGuidance: null,
-        skillPools: null,
-        gameStatus: 'characterCreation',
-    });
-  }
 
   const renderContent = () => {
     switch (gameState.gameStatus) {
