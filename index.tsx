@@ -541,6 +541,8 @@ const App = () => {
     storyGuidance: null,
     skillPools: null,
     gameStatus: 'initial_load',
+    weather: 'Clear Skies', // Add default weather
+    timeOfDay: 'Morning',   // Add default time of day
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
@@ -604,7 +606,22 @@ const App = () => {
                 savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
             }
 
-            setGameState(savedGameState);
+            const fullGameState = {
+                // Start with a complete default state
+                character: null,
+                companions: [],
+                storyLog: [],
+                currentActions: [],
+                storyGuidance: null,
+                skillPools: null,
+                gameStatus: 'characterCreation',
+                weather: 'Clear Skies',
+                timeOfDay: 'Morning',
+                // Now, overwrite with the saved data
+                ...savedGameState
+            };
+            setGameState(fullGameState);
+
             if (savedCreationData) {
                 setCreationData(savedCreationData);
             }
