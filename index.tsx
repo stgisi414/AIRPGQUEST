@@ -587,61 +587,49 @@ const App = () => {
 
   // Load from localStorage on startup
   useEffect(() => {
-    const loadGame = async () => {
+      const loadGame = async () => {
         try {
           const savedStateJSON = localStorage.getItem('endlessAdventureSave');
           if (savedStateJSON) {
             const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
 
-            // Check if we are in a saved game and images are missing
             if (savedGameState.character && savedGameState.gameStatus === 'playing' && !savedGameState.character.portrait) {
-                setGameState(g => ({ ...g, gameStatus: 'loading' })); // Show loader
-
-                // Regenerate the character portrait and the latest scene illustration
-                const [portrait, illustration] = await Promise.all([
-                    generateImage(savedGameState.character.description),
-                    generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
-                ]);
-                
-                // Add the regenerated images back to the state
-                savedGameState.character.portrait = portrait;
-                savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
+              const [portrait, illustration] = await Promise.all([
+                generateImage(savedGameState.character.description),
+                generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
+              ]);
+              savedGameState.character.portrait = portrait;
+              savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
             }
 
-            const fullGameState = {
-                // Start with a complete default state
-                character: null,
-                companions: [],
-                storyLog: [],
-                currentActions: [],
-                storyGuidance: null,
-                skillPools: null,
-                gameStatus: 'characterCreation',
-                weather: 'Clear Skies',
-                timeOfDay: 'Morning',
-                // Now, overwrite with the saved data
+            // IMPORTANT: Merge with defaults to prevent errors from old saves
+            setGameState(prevState => ({
+                ...prevState,
                 ...savedGameState
-            };
-            setGameState(fullGameState);
+            }));
 
             if (savedCreationData) {
-                setCreationData(savedCreationData);
+              setCreationData(savedCreationData);
             }
+
           } else {
-            setGameState(g => ({ ...g, gameStatus: 'characterCreation' }));
+            // If there's no save file, start a new game.
+            handleNewGame();
           }
         } catch (error) {
-          console.error("Failed to load saved state:", error);
-          handleNewGame(); // Reset if save is corrupted
+          console.error("Failed to load or parse saved state, starting new game:", error);
+          // If the save file is corrupted, start a new game.
+          handleNewGame();
         }
-    };
+      };
 
-    loadGame();
-  }, [generateImage, handleNewGame]);
+      loadGame();
+      // This useEffect should ONLY run once on startup.
+  }, [generateImage]);
 
   // Save to localStorage on change
   useEffect(() => {
-    if (gameState.gameStatus !== 'initial_load') {
+    if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
       const stateToSave = {
         ...gameState,
         // Still remove the portrait to save space; it will be regenerated on load.
