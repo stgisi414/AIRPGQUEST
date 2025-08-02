@@ -31,6 +31,7 @@ interface Character {
   skillPoints: number;
   description: string;
   portrait: string; // base64 image
+  storySummary?: string;
 }
 
 interface StorySegment {
@@ -134,6 +135,17 @@ const nextStepSchema = {
     },
     required: ['story']
 }
+
+const storySummarySchema = {
+  type: Type.OBJECT,
+  properties: {
+    summary: {
+      type: Type.STRING,
+      description: "A detailed, narrative summary of the character's story so far. It should read like a chapter in a book."
+    }
+  },
+  required: ['summary']
+};
 
 // --- STATIC DATA ---
 const RACES = ["Human", "Elf", "Dwarf", "Orc", "Halfling", "Gnome", "Dragonborn", "Tiefling", "Half-Elf"];
@@ -410,29 +422,78 @@ const App = () => {
 
   // Load from localStorage on startup
   useEffect(() => {
-    try {
-      const savedState = localStorage.getItem('endlessAdventureSave');
-      if (savedState) {
-        const {gameState: savedGameState, creationData: savedCreationData} = JSON.parse(savedState);
-        setGameState(savedGameState);
-        if (savedCreationData) {
-            setCreationData(savedCreationData);
+    const loadGame = async () => {
+        try {
+          const savedStateJSON = localStorage.getItem('endlessAdventureSave');
+          if (savedStateJSON) {
+            const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
+
+            // Check if we are in a saved game and images are missing
+            if (savedGameState.character && savedGameState.gameStatus === 'playing' && !savedGameState.character.portrait) {
+                setGameState(g => ({ ...g, gameStatus: 'loading' })); // Show loader
+
+                // Regenerate the character portrait and the latest scene illustration
+                const [portrait, illustration] = await Promise.all([
+                    generateImage(savedGameState.character.description),
+                    generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
+                ]);
+                
+                // Add the regenerated images back to the state
+                savedGameState.character.portrait = portrait;
+                savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
+            }
+
+            setGameState(savedGameState);
+            if (savedCreationData) {
+                setCreationData(savedCreationData);
+            }
+          } else {
+            setGameState(g => ({ ...g, gameStatus: 'characterCreation' }));
+          }
+        } catch (error) {
+          console.error("Failed to load saved state:", error);
+          handleNewGame(); // Reset if save is corrupted
         }
-      } else {
-        setGameState(g => ({ ...g, gameStatus: 'characterCreation' }));
-      }
-    } catch (error) {
-      console.error("Failed to load saved state:", error);
-      handleNewGame(); // Reset if save is corrupted
-    }
+    };
+
+    loadGame();
+  }, [generateImage]); // Dependency array now includes generateImage
+
+  // Also, wrap handleNewGame in useCallback for stability
+  const handleNewGame = useCallback(() => {
+    localStorage.removeItem('endlessAdventureSave');
+    setCreationData(null);
+    setGameState({
+        character: null,
+        storyLog: [],
+        currentActions: [],
+        storyGuidance: null,
+        skillPools: null,
+        gameStatus: 'characterCreation',
+    });
   }, []);
 
   // Save to localStorage on change
   useEffect(() => {
     if (gameState.gameStatus !== 'initial_load') {
-      localStorage.setItem('endlessAdventureSave', JSON.stringify({gameState, creationData}));
+      const stateToSave = {
+        ...gameState,
+        // Still remove the portrait to save space; it will be regenerated on load.
+        character: gameState.character
+          ? { ...gameState.character, portrait: '' }
+          : null,
+        // For the story log, only keep the illustration for the very last entry.
+        storyLog: gameState.storyLog.map((segment, index) => {
+          if (index === gameState.storyLog.length - 1) {
+            return segment; // This is the last segment, keep the illustration.
+          }
+          return { ...segment, illustration: '' }; // For all others, clear it.
+        }),
+      };
+      localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
     }
   }, [gameState, creationData]);
+
 
   const generateImage = useCallback(async (prompt: string): Promise<string> => {
     try {
@@ -562,8 +623,15 @@ const App = () => {
             Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
             Description: ${gameState.character.description}
 
-            STORY SO FAR:
+            CHARACTER STORY SUMMARY (What happened before the most recent events):
+            ---
+            ${gameState.character.storySummary || "The story is just beginning."}
+            ---
+
+            RECENT STORY SO FAR (The last 50 messages):
+            ---
             ${storyHistory}
+            ---
 
             PLAYER ACTION: "${action}"
 
@@ -599,10 +667,58 @@ const App = () => {
             return {
                 ...prevState,
                 character: updatedCharacter,
-                storyLog: [...prevState.storyLog, newSegment],
+                storyLog: [...prevState.storyLog, newSegment].slice(-100),
                 currentActions: data.actions
             };
         });
+
+        const newStoryLogLength = gameState.storyLog.length + 1;
+        if (newStoryLogLength > 0 && newStoryLogLength % 10 === 0) {
+            const oldSummary = gameState.character?.storySummary || "The story has just begun.";
+            const recentEvents = [...gameState.storyLog, newSegment].slice(-10).map(s => s.text).join('\n\n');
+
+            const summaryPrompt = `
+                You are a master storyteller. Update the character's story summary based on the previous summary and recent events.
+                - 40% importance on the "PREVIOUS SUMMARY".
+                - 60% importance on the "RECENT EVENTS".
+                Weave the new events into the existing narrative to create a new, cohesive summary.
+
+                PREVIOUS SUMMARY:
+                ---
+                ${oldSummary}
+                ---
+
+                RECENT EVENTS:
+                ---
+                ${recentEvents}
+                ---
+
+                Generate the new, complete summary.
+            `;
+
+            const summaryResponse = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: summaryPrompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: storySummarySchema,
+                    safetySettings: safetySettings
+                },
+            });
+
+            const summaryData = JSON.parse(summaryResponse.text);
+
+            setGameState(prevState => {
+                if (!prevState.character) return prevState;
+                return {
+                    ...prevState,
+                    character: {
+                        ...prevState.character,
+                        storySummary: summaryData.summary
+                    }
+                };
+            });
+        }
 
       } catch (error) {
           console.error("Action handling failed:", error);
