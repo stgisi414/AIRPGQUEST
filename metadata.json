@@ -1,0 +1,5 @@
+{
+  "description": "An illustrated text adventure game powered by Gemini. This application features a dynamic character creation process where the AI generates a character with unique stats, a visually rendered portrait, and a high-level story outline. The game then unfolds with an endless, AI-generated narrative, complete with scene illustrations and interactive action buttons. All game progress is automatically saved to the browser's local storage for a seamless experience.",
+  "requestFramePermissions": [],
+  "name": "App"
+}
