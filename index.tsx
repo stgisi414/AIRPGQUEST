@@ -603,7 +603,7 @@ const App = () => {
     try {
         const response = await ai.models.generateImages({
             model: 'imagen-3.0-generate-002',
-            prompt: `fantasy art, digital painting. ${prompt}`,
+            prompt: `headshot portrait, character bust, fantasy art, digital painting, centered, fancy background. no body. ${prompt}`,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
@@ -714,7 +714,7 @@ const App = () => {
             - Race: ${race}
             - Class: ${characterClass}
             - Background: ${background}
-            - Desired Campaign Type: ${campaign}
+            - Desired Campaign Type: ${details.campaign}
 
             Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
         `;
