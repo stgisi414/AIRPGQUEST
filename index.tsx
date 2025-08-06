@@ -452,11 +452,14 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
 const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void}) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
+    // Defensive check to prevent crashes if the component tries to render too early.
     if (!gameState.character || gameState.storyLog.length === 0) {
         return <Loader text="Loading game..." />;
     }
 
-    const { character, storyLog, currentActions } = gameState;
+    // Destructure gameState to provide default values, making the component more resilient.
+    const { character, storyLog, currentActions, companions = [] } = gameState;
+    const { name, hp, xp, skillPoints, portrait, skills = {}, gender } = character;
     const currentScene = storyLog[storyLog.length - 1];
 
     useEffect(() => {
@@ -508,28 +511,28 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
             </header>
             <main className="game-main">
                 <div className="character-panel">
-                    <img src={character.portrait} alt={`${character.name}'s portrait`} className="character-portrait" />
-                    <h2>{character.name}</h2>
+                    <img src={portrait} alt={`${name}'s portrait`} className="character-portrait" />
+                    <h2>{name}</h2>
                     <div className="stats-grid">
                         <div className="stat-item">
                             <span className="stat-label">HP</span>
-                            <span className="stat-value">{character.hp}</span>
+                            <span className="stat-value">{hp}</span>
                         </div>
                          <div className="stat-item">
                             <span className="stat-label">XP</span>
-                            <span className="stat-value">{character.xp}</span>
+                            <span className="stat-value">{xp}</span>
                         </div>
                     </div>
 
-                    {character.skillPoints > 0 && (
+                    {skillPoints > 0 && (
                         <button onClick={onLevelUp} className="level-up-btn">
-                            Level Up ({character.skillPoints} Points)
+                            Level Up ({skillPoints} Points)
                         </button>
                     )}
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
-                        {Object.entries(character.skills).sort(([, lvlA], [, lvlB]) => lvlB - lvlA).map(([skill, level]) => (
+                        {Object.entries(skills).sort(([, lvlA], [, lvlB]) => lvlB - lvlA).map(([skill, level]) => (
                             <li key={skill}>{skill} <span className="skill-level">Lvl {level}</span></li>
                         ))}
                     </ul>
@@ -537,8 +540,8 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
 
                     <h3>Party</h3>
                     <ul className="skills-list">
-                        {gameState.companions && gameState.companions.length > 0 ? (
-                            gameState.companions.map(companion => (
+                        {companions.length > 0 ? (
+                            companions.map(companion => (
                                 <li key={companion.name}>
                                     <span>{companion.name}</span>
                                     <span className="skill-level" title={`Relationship: ${companion.relationship}`}>
@@ -559,7 +562,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     <div className="story-text">
                         <button
                             className="play-audio-btn"
-                            onClick={() => handlePlayAudio(currentScene.text, character.gender)}
+                            onClick={() => handlePlayAudio(currentScene.text, gender)}
                             aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
                         >
                             {isSpeaking ? '⏹️' : '▶️'}
