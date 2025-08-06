@@ -44,11 +44,6 @@ interface Character {
 interface StorySegment {
   text: string;
   illustration: string; // base64 image
-  skillCheck?: {
-    skillName: string;
-    success: boolean;
-    difficulty: string;
-  };
 }
 
 type SkillPools = { [key: string]: string[] };
@@ -94,6 +89,7 @@ interface CreationData {
     initialStory: { text: string; actions: string[] };
     skillPools: SkillPools;
     startingSkillPoints: number;
+    startingEquipment: any; // Using `any` for simplicity here
 }
 
 // Data from initial creation form
@@ -103,7 +99,7 @@ interface CreationDetails {
     race: string;
     characterClass: string;
     background: string;
-    campaign: string; 
+    campaign: string;
 }
 
 interface Equipment {
@@ -146,7 +142,7 @@ const characterGenSchema = {
             items: {
                 type: Type.OBJECT,
                 properties: {
-                    skillName: { 
+                    skillName: {
                         type: Type.STRING,
                         description: "The name of the skill (e.g., 'Swords', 'Alchemy')."
                     },
@@ -237,12 +233,13 @@ const nextStepSchema = {
                 },
                 newCompanion: {
                     type: Type.OBJECT,
-                    description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null.",
+                    description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null. NOTE: If the player recruits a previously mentioned character, still use this field to return their full data.",
                     nullable: true,
                     properties: {
                         name: { type: Type.STRING },
                         description: { type: Type.STRING },
                         personality: { type: Type.STRING },
+                        // REPLACE the old 'skills' definition with this one:
                         skills: {
                             type: Type.ARRAY,
                             description: "An array of objects, where each object represents a skill and its level.",
@@ -281,18 +278,6 @@ const nextStepSchema = {
                         },
                         required: ['slot', 'name', 'description', 'stats', 'action']
                     }
-                },
-                // Add the new skillCheck field
-                skillCheck: {
-                    type: Type.OBJECT,
-                    description: "Details of a skill check performed. Only include if a skill check was triggered by the player's action.",
-                    nullable: true,
-                    properties: {
-                        skillName: { type: Type.STRING, description: "The name of the skill being tested (e.g., 'Swordsmanship')." },
-                        success: { type: Type.BOOLEAN, description: "True if the skill check was successful, false otherwise." },
-                        difficulty: { type: Type.STRING, description: "A brief description of the difficulty (e.g., 'Moderate', 'Challenging')." },
-                    },
-                    required: ['skillName', 'success', 'difficulty']
                 }
             },
             required: ['text', 'actions', 'didHpChange', 'didXpChange', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
@@ -433,8 +418,6 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
                 </select>
             </div>
         </div>
-        
-        
 
 
         <button type="submit" disabled={isLoading || !name.trim()}>
@@ -466,7 +449,7 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
             setPoints(p => p - change);
         }
     }
-    
+
     const allSkills = Object.values(skillPools).flat();
     const learnedSkills = Object.keys(skills);
     const unlearnedSkills = allSkills.filter(s => !learnedSkills.includes(s));
@@ -653,16 +636,6 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         >
                             {isSpeaking ? '⏹️' : '▶️'}
                         </button>
-                        {/* Display skill check result here */}
-                        {currentScene.skillCheck && (
-                            <p style={{
-                                fontStyle: 'italic',
-                                color: currentScene.skillCheck.success ? 'green' : 'red',
-                                textAlign: 'center'
-                            }}>
-                                Your {currentScene.skillCheck.skillName} check ({currentScene.skillCheck.difficulty}) was a {currentScene.skillCheck.success ? 'success' : 'failure'}!
-                            </p>
-                        )}
                         <p>{currentScene.text}</p>
                     </div>
                     <div className="actions-panel">
@@ -847,7 +820,7 @@ const App = () => {
             };
         });
 
-        
+
         setCreationData({
             name: data.character.name,
             gender: details.gender,
@@ -923,6 +896,7 @@ const App = () => {
             `  - Name: ${c.name}, Personality: ${c.personality}, Relationship: ${c.relationship}`
         ).join('\n');
 
+        // Update the prompt to tell the AI about the new equipmentUpdates field
         const prompt = `
             Continue this text adventure.
             STORY GUIDANCE:
@@ -960,8 +934,7 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
-            If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check against a difficulty. The player's skill level should influence the success. Populate the 'skillCheck' field with the results. The 'text' field should narrate the outcome of the skill check.
-            Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
+            Update companion relationships if their opinion of the player changes. If the player recruits a previously mentioned character (like Elara), you MUST populate the 'newCompanion' field with their full details.
             Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
         `;
 
@@ -977,11 +950,7 @@ const App = () => {
 
         const data = JSON.parse(response.text).story;
         const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
-        const newSegment: StorySegment = {
-            text: data.text,
-            illustration: newIllustration,
-            skillCheck: data.skillCheck // <-- Save the skill check data
-        };
+        const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
 
         setGameState(prevState => {
             if (!prevState.character) return prevState;
@@ -1037,7 +1006,8 @@ const App = () => {
             }
 
             // Handle adding a new companion
-            if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
+            // Check if the new companion is a character that is not already in the party.
+            if (data.newCompanion && !updatedCompanions.find(c => c.name === data.newCompanion.name)) {
                  if (updatedCompanions.length < 5) {
                     const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                         acc[skill.skillName] = skill.level;
@@ -1119,7 +1089,7 @@ const App = () => {
         setApiIsLoading(false);
     }
   }, [gameState, generateImage]);
-  
+
   const handleCustomActionSubmit = (action: string) => {
       setIsCustomActionModalOpen(false);
       handleAction(action);
@@ -1128,7 +1098,7 @@ const App = () => {
   const handleLevelUpComplete = (updatedSkills: {[key: string]: number}) => {
       setGameState(g => {
         if (!g.character) return g;
-        
+
         const pointsSpent = Object.values(updatedSkills).reduce((sum, level) => sum + level, 0) - Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
 
         return {
@@ -1146,11 +1116,11 @@ const App = () => {
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'playing':
-        return <GameScreen 
-                    gameState={gameState} 
-                    onAction={handleAction} 
-                    onNewGame={handleNewGame} 
-                    onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} 
+        return <GameScreen
+                    gameState={gameState}
+                    onAction={handleAction}
+                    onNewGame={handleNewGame}
+                    onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
                     isLoading={apiIsLoading}
                     onCustomActionClick={() => setIsCustomActionModalOpen(true)}
                 />;
