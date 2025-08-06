@@ -75,9 +75,10 @@ interface GameState {
     setting: string;
   } | null;
   skillPools: SkillPools | null;
-  gameStatus: 'characterCreation' | 'characterCustomize' | 'levelUp' | 'playing' | 'loading' | 'initial_load';
+  gameStatus: 'characterCreation' | 'characterCustomize' | 'levelUp' | 'playing' | 'loading' | 'initial_load' | 'combat' | 'gameOver';
   weather: string;
   timeOfDay: string;
+  combat: CombatState | null;
 }
 
 // Data stored before character is finalized
@@ -112,6 +113,27 @@ interface Equipment {
   };
 }
 
+// --- COMBAT TYPES ---
+interface Enemy {
+    id: string;
+    name: string;
+    hp: number;
+    maxHp: number;
+    description: string;
+    portrait: string; // base64 image
+}
+
+interface CombatLogEntry {
+    type: 'player' | 'enemy' | 'info';
+    message: string;
+}
+
+interface CombatState {
+    enemies: Enemy[];
+    log: CombatLogEntry[];
+    turn: 'player' | 'enemy';
+    availableActions: string[];
+}
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -219,6 +241,20 @@ const nextStepSchema = {
                 actions: { type: Type.ARRAY, items: { type: Type.STRING }, description: "A new array of 3-4 actions the player can take now."},
                 didHpChange: { type: Type.INTEGER, description: "The number of HP points the character gained or lost (e.g., -10 or 5). Should be 0 if no change."},
                 didXpChange: { type: Type.INTEGER, description: "The number of XP points the character gained. Should be 0 if no change."},
+                initiateCombat: { type: Type.BOOLEAN, description: "Set to true if the story should now transition into a combat encounter."},
+                enemies: {
+                    type: Type.ARRAY,
+                    description: "If initiateCombat is true, provide an array of enemies. Otherwise, this should be null.",
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING },
+                            description: { type: Type.STRING, description: "A detailed description suitable for generating a portrait image."},
+                            hp: { type: Type.INTEGER }
+                        },
+                        required: ['name', 'description', 'hp']
+                    }
+                },
                 companionUpdates: {
                     type: Type.ARRAY,
                     description: "An array of updates for companions. Includes relationship changes.",
@@ -280,11 +316,50 @@ const nextStepSchema = {
                     }
                 }
             },
-            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
+            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
         }
     },
     required: ['story']
 }
+
+const combatActionSchema = {
+    type: Type.OBJECT,
+    properties: {
+        combatResult: {
+            type: Type.OBJECT,
+            properties: {
+                log: {
+                    type: Type.ARRAY,
+                    description: "A list of events that occurred this turn, as strings. e.g., ['You swing your sword at the Goblin.', 'You hit for 12 damage.', 'The Goblin attacks you.', 'You take 5 damage.']",
+                    items: { type: Type.STRING }
+                },
+                playerHpChange: { type: Type.INTEGER, description: "The total HP change for the player this turn." },
+                enemyHpChanges: {
+                    type: Type.ARRAY,
+                    description: "An array of HP changes for each enemy.",
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            id: { type: Type.STRING, description: "The ID of the enemy whose HP changed." },
+                            hpChange: { type: Type.INTEGER, description: "The amount of HP the enemy lost (negative number)." }
+                        },
+                        required: ['id', 'hpChange']
+                    }
+                },
+                availableActions: {
+                    type: Type.ARRAY,
+                    description: "A new list of 3-4 available actions for the player's next turn.",
+                    items: { type: Type.STRING }
+                },
+                combatOver: { type: Type.BOOLEAN, description: "Set to true if all enemies have been defeated." },
+                victoryText: { type: Type.STRING, description: "If combat is over, a short text describing the victory. e.g., 'You stand victorious over the defeated goblins.'", nullable: true },
+                xpGained: { type: Type.INTEGER, description: "If combat is over, the amount of XP gained.", nullable: true }
+            },
+            required: ['log', 'playerHpChange', 'enemyHpChanges', 'availableActions', 'combatOver']
+        }
+    },
+    required: ['combatResult']
+};
 
 const storySummarySchema = {
   type: Type.OBJECT,
@@ -598,7 +673,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                               <span className="skill-level">
                                 {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
                                 {gear.stats.damage && gear.stats.damageReduction ? ' | ' : ''}
-                                {gear.stats.damageReduction ? `DR: ${gear.stats.damageReduction}` : ''}
+                                {gear.stats.damageReduction ? `DR: {gear.stats.damageReduction}` : ''}
                               </span>
                             </li>
                           ))}
@@ -654,6 +729,56 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
     );
 }
 
+const CombatScreen = ({ gameState, onCombatAction, isLoading }: { gameState: GameState, onCombatAction: (action: string) => void, isLoading: boolean }) => {
+    if (!gameState.character || !gameState.combat) {
+        return <Loader text="Loading combat..." />;
+    }
+
+    const { character, combat } = gameState;
+
+    return (
+        <div className="combat-container">
+            <header className="combat-header">
+                <h1>Combat!</h1>
+            </header>
+            <div className="enemies-container">
+                {combat.enemies.map(enemy => (
+                    <div key={enemy.id} className={`enemy-card ${enemy.hp <= 0 ? 'defeated' : ''}`}>
+                        <img src={enemy.portrait} alt={enemy.name} className="enemy-portrait" />
+                        <h3>{enemy.name}</h3>
+                        <div className="enemy-hp-bar-container">
+                            <div className="enemy-hp-bar" style={{ width: `${(enemy.hp / enemy.maxHp) * 100}%` }}></div>
+                        </div>
+                        <span>HP: {enemy.hp} / {enemy.maxHp}</span>
+                    </div>
+                ))}
+            </div>
+            <div className="combat-log-container">
+                {combat.log.map((entry, index) => (
+                    <div key={index} className={`combat-log-entry ${entry.type}`}>
+                        {entry.message}
+                    </div>
+                )).reverse()}
+            </div>
+            <div className="combat-actions-panel">
+                {combat.availableActions.map(action => (
+                    <button key={action} onClick={() => onCombatAction(action)} disabled={isLoading}>
+                        {action}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const GameOverScreen = ({ onNewGame }: { onNewGame: () => void }) => (
+    <div className="game-over-container">
+        <h1>Game Over</h1>
+        <p>Your adventure has come to an end.</p>
+        <button onClick={onNewGame}>Start a New Journey</button>
+    </div>
+);
+
 // --- MAIN APP ---
 
 const App = () => {
@@ -667,6 +792,7 @@ const App = () => {
     gameStatus: 'initial_load',
     weather: 'Clear Skies',
     timeOfDay: 'Morning',
+    combat: null,
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
@@ -706,6 +832,7 @@ const App = () => {
         weather: 'Clear Skies',
         timeOfDay: 'Morning',
         gameStatus: 'characterCreation',
+        combat: null,
       }));
   }, [setGameState, setCreationData]); // Add dependencies
 
@@ -936,6 +1063,7 @@ const App = () => {
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
             Update companion relationships if their opinion of the player changes. If the player recruits a previously mentioned character (like Elara), you MUST populate the 'newCompanion' field with their full details.
             Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
+            If the action leads to a fight, set 'initiateCombat' to true and provide a list of enemies.
         `;
 
         const response = await ai.models.generateContent({
@@ -949,90 +1077,121 @@ const App = () => {
         });
 
         const data = JSON.parse(response.text).story;
-        const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
-        const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
 
-        setGameState(prevState => {
-            if (!prevState.character) return prevState;
-            const oldXp = prevState.character.xp;
-            const newXp = oldXp + data.didXpChange;
-            const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
-            const newReputation = { ...prevState.character.reputation };
-            if (data.reputationChange) {
-                for (const [faction, change] of Object.entries(data.reputationChange)) {
-                    newReputation[faction] = (newReputation[faction] || 0) + change;
+        if (data.initiateCombat) {
+            const enemyPortraits = await Promise.all(
+                data.enemies.map((enemy: any) => generateImage(enemy.description))
+            );
+            const enemies: Enemy[] = data.enemies.map((enemy: any, index: number) => ({
+                id: `${enemy.name}-${index}`,
+                name: enemy.name,
+                hp: enemy.hp,
+                maxHp: enemy.hp,
+                description: enemy.description,
+                portrait: enemyPortraits[index],
+            }));
+            const combatLog: CombatLogEntry[] = [{
+                type: 'info',
+                message: data.text
+            }];
+
+            setGameState(prevState => ({
+                ...prevState,
+                gameStatus: 'combat',
+                combat: {
+                    enemies,
+                    log: combatLog,
+                    turn: 'player',
+                    availableActions: data.actions
                 }
-            }
+            }));
 
-            // Handle equipment updates
-            const updatedEquipment = { ...prevState.character.equipment };
-            if (data.equipmentUpdates) {
-                for (const update of data.equipmentUpdates) {
-                    const newEquipmentItem: Equipment = {
-                        name: update.name,
-                        description: update.description,
-                        stats: update.stats
-                    };
-                    if (update.slot === 'weapon') {
-                        updatedEquipment.weapon = newEquipmentItem;
-                    } else if (update.slot === 'armor') {
-                        updatedEquipment.armor = newEquipmentItem;
-                    } else if (update.slot === 'gear') {
-                        // This assumes 'add' is the only action for 'gear' for simplicity
-                        if (update.action === 'add') {
-                             updatedEquipment.gear = [...(updatedEquipment.gear || []), newEquipmentItem];
+        } else {
+            const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
+            const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
+
+            setGameState(prevState => {
+                if (!prevState.character) return prevState;
+                const oldXp = prevState.character.xp;
+                const newXp = oldXp + data.didXpChange;
+                const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
+                const newReputation = { ...prevState.character.reputation };
+                if (data.reputationChange) {
+                    for (const [faction, change] of Object.entries(data.reputationChange)) {
+                        newReputation[faction] = (newReputation[faction] || 0) + change;
+                    }
+                }
+
+                // Handle equipment updates
+                const updatedEquipment = { ...prevState.character.equipment };
+                if (data.equipmentUpdates) {
+                    for (const update of data.equipmentUpdates) {
+                        const newEquipmentItem: Equipment = {
+                            name: update.name,
+                            description: update.description,
+                            stats: update.stats
+                        };
+                        if (update.slot === 'weapon') {
+                            updatedEquipment.weapon = newEquipmentItem;
+                        } else if (update.slot === 'armor') {
+                            updatedEquipment.armor = newEquipmentItem;
+                        } else if (update.slot === 'gear') {
+                            // This assumes 'add' is the only action for 'gear' for simplicity
+                            if (update.action === 'add') {
+                                 updatedEquipment.gear = [...(updatedEquipment.gear || []), newEquipmentItem];
+                            }
                         }
                     }
                 }
-            }
 
-            const updatedCharacter = {
-                ...prevState.character,
-                hp: prevState.character.hp + data.didHpChange,
-                xp: newXp,
-                skillPoints: prevState.character.skillPoints + earnedSkillPoints,
-                reputation: newReputation,
-                equipment: updatedEquipment,
-            };
+                const updatedCharacter = {
+                    ...prevState.character,
+                    hp: prevState.character.hp + data.didHpChange,
+                    xp: newXp,
+                    skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                    reputation: newReputation,
+                    equipment: updatedEquipment,
+                };
 
-            const updatedCompanions = [...prevState.companions];
-            if (data.companionUpdates) {
-                for (const update of data.companionUpdates) {
-                    const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
-                    if (companionIndex !== -1) {
-                        updatedCompanions[companionIndex].relationship += update.relationshipChange;
+                const updatedCompanions = [...prevState.companions];
+                if (data.companionUpdates) {
+                    for (const update of data.companionUpdates) {
+                        const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
+                        if (companionIndex !== -1) {
+                            updatedCompanions[companionIndex].relationship += update.relationshipChange;
+                        }
                     }
                 }
-            }
 
-            // Handle adding a new companion
-            // Check if the new companion is a character that is not already in the party.
-            if (data.newCompanion && !updatedCompanions.find(c => c.name === data.newCompanion.name)) {
-                 if (updatedCompanions.length < 5) {
-                    const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
-                        acc[skill.skillName] = skill.level;
-                        return acc;
-                    }, {});
+                // Handle adding a new companion
+                // Check if the new companion is a character that is not already in the party.
+                if (data.newCompanion && !updatedCompanions.find(c => c.name === data.newCompanion.name)) {
+                     if (updatedCompanions.length < 5) {
+                        const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
+                            acc[skill.skillName] = skill.level;
+                            return acc;
+                        }, {});
 
-                     const companionToAdd: Companion = {
-                         ...data.newCompanion,
-                         skills: skillsObject,
-                         relationship: 20
-                     };
-                     updatedCompanions.push(companionToAdd);
-                 }
-            }
+                         const companionToAdd: Companion = {
+                             ...data.newCompanion,
+                             skills: skillsObject,
+                             relationship: 20
+                         };
+                         updatedCompanions.push(companionToAdd);
+                     }
+                }
 
-            return {
-                ...prevState,
-                character: updatedCharacter,
-                companions: updatedCompanions,
-                weather: data.newWeather,
-                timeOfDay: data.newTimeOfDay,
-                storyLog: [...prevState.storyLog, newSegment].slice(-100),
-                currentActions: data.actions,
-            };
-        });
+                return {
+                    ...prevState,
+                    character: updatedCharacter,
+                    companions: updatedCompanions,
+                    weather: data.newWeather,
+                    timeOfDay: data.newTimeOfDay,
+                    storyLog: [...prevState.storyLog, newSegment].slice(-100),
+                    currentActions: data.actions,
+                };
+            });
+        }
 
         // ... rest of the function for generating story summary
         const newStoryLogLength = gameState.storyLog.length + 1;
@@ -1090,6 +1249,94 @@ const App = () => {
     }
   }, [gameState, generateImage]);
 
+  const handleCombatAction = useCallback(async (action: string) => {
+    if (!gameState.character || !gameState.combat) return;
+    setApiIsLoading(true);
+
+    const prompt = `
+        You are the dungeon master in a text-based RPG. The player is in combat.
+        Player's action: "${action}"
+        Character: ${gameState.character.name} (HP: ${gameState.character.hp})
+        Skills: ${Object.keys(gameState.character.skills).join(', ')}
+        Enemies: ${gameState.combat.enemies.map(e => `${e.name} (HP: ${e.hp})`).join(', ')}
+
+        Process the player's action and the enemies' turn. Return the result of the turn.
+        - Describe what happens in the combat log.
+        - Calculate HP changes for player and enemies.
+        - Provide new actions for the player's next turn.
+        - If all enemies are defeated, set combatOver to true.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: combatActionSchema,
+                safetySettings: safetySettings,
+            },
+        });
+
+        const data = JSON.parse(response.text).combatResult;
+
+        setGameState(prevState => {
+            if (!prevState.character || !prevState.combat) return prevState;
+
+            const newLog: CombatLogEntry[] = data.log.map((message: string) => ({ type: 'info', message }));
+            const newEnemies = [...prevState.combat.enemies];
+            data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
+                const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
+                if (enemyIndex !== -1) {
+                    newEnemies[enemyIndex].hp += change.hpChange;
+                }
+            });
+
+            const newPlayerHp = prevState.character.hp + data.playerHpChange;
+            if (newPlayerHp <= 0) {
+                return { ...prevState, gameStatus: 'gameOver' };
+            }
+
+            if (data.combatOver) {
+                const newXp = prevState.character.xp + (data.xpGained || 0);
+                const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
+
+                return {
+                    ...prevState,
+                    character: {
+                        ...prevState.character,
+                        hp: newPlayerHp,
+                        xp: newXp,
+                        skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                    },
+                    gameStatus: 'playing',
+                    combat: null,
+                    currentActions: [data.victoryText, 'Continue exploring.'],
+                };
+            }
+
+            return {
+                ...prevState,
+                character: {
+                    ...prevState.character,
+                    hp: newPlayerHp,
+                },
+                combat: {
+                    ...prevState.combat,
+                    enemies: newEnemies,
+                    log: [...prevState.combat.log, ...newLog],
+                    availableActions: data.availableActions,
+                },
+            };
+        });
+
+    } catch (error) {
+        console.error("Combat action failed:", error);
+    } finally {
+        setApiIsLoading(false);
+    }
+}, [gameState]);
+
   const handleCustomActionSubmit = (action: string) => {
       setIsCustomActionModalOpen(false);
       handleAction(action);
@@ -1146,6 +1393,10 @@ const App = () => {
                     onCancel={() => setGameState(g => ({...g, gameStatus: 'playing'}))}
                     completeButtonText="Confirm Skills"
                 />
+      case 'combat':
+          return <CombatScreen gameState={gameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} />;
+      case 'gameOver':
+          return <GameOverScreen onNewGame={handleNewGame} />;
       case 'loading':
         return <Loader text="Your story is being written..." />;
       case 'initial_load':
