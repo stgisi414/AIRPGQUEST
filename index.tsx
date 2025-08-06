@@ -44,6 +44,11 @@ interface Character {
 interface StorySegment {
   text: string;
   illustration: string; // base64 image
+  skillCheck?: {
+    skillName: string;
+    success: boolean;
+    difficulty: string;
+  };
 }
 
 type SkillPools = { [key: string]: string[] };
@@ -234,18 +239,17 @@ const nextStepSchema = {
                     type: Type.OBJECT,
                     description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null.",
                     nullable: true,
-                    properties: { 
+                    properties: {
                         name: { type: Type.STRING },
                         description: { type: Type.STRING },
                         personality: { type: Type.STRING },
-                        // REPLACE the old 'skills' definition with this one:
                         skills: {
                             type: Type.ARRAY,
                             description: "An array of objects, where each object represents a skill and its level.",
                             items: {
                                 type: Type.OBJECT,
                                 properties: {
-                                    skillName: { 
+                                    skillName: {
                                         type: Type.STRING,
                                         description: "The name of the skill."
                                     },
@@ -277,6 +281,18 @@ const nextStepSchema = {
                         },
                         required: ['slot', 'name', 'description', 'stats', 'action']
                     }
+                },
+                // Add the new skillCheck field
+                skillCheck: {
+                    type: Type.OBJECT,
+                    description: "Details of a skill check performed. Only include if a skill check was triggered by the player's action.",
+                    nullable: true,
+                    properties: {
+                        skillName: { type: Type.STRING, description: "The name of the skill being tested (e.g., 'Swordsmanship')." },
+                        success: { type: Type.BOOLEAN, description: "True if the skill check was successful, false otherwise." },
+                        difficulty: { type: Type.STRING, description: "A brief description of the difficulty (e.g., 'Moderate', 'Challenging')." },
+                    },
+                    required: ['skillName', 'success', 'difficulty']
                 }
             },
             required: ['text', 'actions', 'didHpChange', 'didXpChange', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
@@ -541,7 +557,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
         if (selectedVoice) {
             utterance.voice = selectedVoice;
         }
-        
+
         utterance.onstart = () => setIsSpeaking(true);
         utterance.onend = () => setIsSpeaking(false);
         utterance.onerror = () => setIsSpeaking(false);
@@ -637,6 +653,16 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         >
                             {isSpeaking ? '⏹️' : '▶️'}
                         </button>
+                        {/* Display skill check result here */}
+                        {currentScene.skillCheck && (
+                            <p style={{
+                                fontStyle: 'italic',
+                                color: currentScene.skillCheck.success ? 'green' : 'red',
+                                textAlign: 'center'
+                            }}>
+                                Your {currentScene.skillCheck.skillName} check ({currentScene.skillCheck.difficulty}) was a {currentScene.skillCheck.success ? 'success' : 'failure'}!
+                            </p>
+                        )}
                         <p>{currentScene.text}</p>
                     </div>
                     <div className="actions-panel">
@@ -948,7 +974,7 @@ const App = () => {
                 safetySettings: safetySettings,
             },
         });
-        
+
         const data = JSON.parse(response.text).story;
         const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
         const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
@@ -964,7 +990,7 @@ const App = () => {
                     newReputation[faction] = (newReputation[faction] || 0) + change;
                 }
             }
-            
+
             // Handle equipment updates
             const updatedEquipment = { ...prevState.character.equipment };
             if (data.equipmentUpdates) {
@@ -986,7 +1012,7 @@ const App = () => {
                     }
                 }
             }
-            
+
             const updatedCharacter = {
                 ...prevState.character,
                 hp: prevState.character.hp + data.didHpChange,
@@ -996,7 +1022,7 @@ const App = () => {
                 equipment: updatedEquipment,
             };
 
-            const updatedCompanions = [...prevState.companions];
+            let updatedCompanions = [...prevState.companions];
             if (data.companionUpdates) {
                 for (const update of data.companionUpdates) {
                     const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
@@ -1006,7 +1032,8 @@ const App = () => {
                 }
             }
 
-            // Handle adding a new companion
+            // Check if the player is trying to recruit a new companion
+            // This is the updated logic
             if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                  if (updatedCompanions.length < 5) {
                     const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
@@ -1017,7 +1044,7 @@ const App = () => {
                      const companionToAdd: Companion = {
                          ...data.newCompanion,
                          skills: skillsObject,
-                         relationship: 20 
+                         relationship: 20
                      };
                      updatedCompanions.push(companionToAdd);
                  }
