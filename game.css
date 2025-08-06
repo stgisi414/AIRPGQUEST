@@ -248,15 +248,15 @@ select:focus, .creation-form select:focus {
 }
 
 @keyframes pulse {
-	0% {
-		box-shadow: 0 0 0 0 rgba(164, 123, 55, 0.7);
-	}
-	70% {
-		box-shadow: 0 0 0 10px rgba(164, 123, 55, 0);
-	}
-	100% {
-		box-shadow: 0 0 0 0 rgba(164, 123, 55, 0);
-	}
+    0% {
+        box-shadow: 0 0 0 0 rgba(164, 123, 55, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(164, 123, 55, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(164, 123, 55, 0);
+    }
 }
 
 
@@ -586,6 +586,7 @@ select:focus, .creation-form select:focus {
     .game-header {
         flex-direction: column;
         gap: 0.5rem;
+        align-items: center;
     }
     .form-grid {
         grid-template-columns: 1fr;

@@ -792,6 +792,8 @@ const App = () => {
 
             Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
             Generate a set of starting equipment (weapon, armor, and a few pieces of gear) for the character and their companions, making it unique and appropriate to their class and background. The equipment should have a name, a short description, and stats like damage or damage reduction. The companion equipment should be stored as 'startingEquipment' under each companion object. The player character's starting equipment should be stored under 'startingEquipment' at the root level of the JSON response.
+            IMPORTANT: For the companions, please generate unique names and personalities. Avoid using the names Kaelen, Lyra, Elara, and Gorok.
+
         `;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
