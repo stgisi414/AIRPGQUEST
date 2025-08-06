@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
+import { Preferences } from '@capacitor/preferences';
 import './game.css';
 
 const safetySettings = [
@@ -620,7 +621,7 @@ const App = () => {
   }, []);
 
   const handleNewGame = useCallback(() => {
-      localStorage.removeItem('endlessAdventureSave');
+      Preferences.remove({ key: 'endlessAdventureSave' });
       setCreationData(null);
       setGameState(prevState => ({
         ...prevState, // Keep existing state properties
@@ -638,65 +639,68 @@ const App = () => {
 
   // Load from localStorage on startup
   useEffect(() => {
-      const loadGame = async () => {
-        try {
-          const savedStateJSON = localStorage.getItem('endlessAdventureSave');
-          if (savedStateJSON) {
-            const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
+    const loadGame = async () => {
+      try {
+        const ret = await Preferences.get({ key: 'endlessAdventureSave' });
+        if (ret.value) {
+          const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(ret.value);
 
-            if (savedGameState.character && savedGameState.gameStatus === 'playing' && !savedGameState.character.portrait) {
-              const [portrait, illustration] = await Promise.all([
-                generateImage(savedGameState.character.description),
-                generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
-              ]);
-              savedGameState.character.portrait = portrait;
-              savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
-            }
-
-            // IMPORTANT: Merge with defaults to prevent errors from old saves
-            setGameState(prevState => ({
-                ...prevState,
-                ...savedGameState
-            }));
-
-            if (savedCreationData) {
-              setCreationData(savedCreationData);
-            }
-
-          } else {
-            // If there's no save file, start a new game.
-            handleNewGame();
+          if (savedGameState.character && savedGameState.gameStatus === 'playing' && !savedGameState.character.portrait) {
+            const [portrait, illustration] = await Promise.all([
+              generateImage(savedGameState.character.description),
+              generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
+            ]);
+            savedGameState.character.portrait = portrait;
+            savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
           }
-        } catch (error) {
-          console.error("Failed to load or parse saved state, starting new game:", error);
-          // If the save file is corrupted, start a new game.
+
+          // IMPORTANT: Merge with defaults to prevent errors from old saves
+          setGameState(prevState => ({
+              ...prevState,
+              ...savedGameState
+          }));
+
+          if (savedCreationData) {
+            setCreationData(savedCreationData);
+          }
+
+        } else {
+          // If there's no save file, start a new game.
           handleNewGame();
         }
-      };
+      } catch (error) {
+        console.error("Failed to load or parse saved state, starting new game:", error);
+        // If the save file is corrupted, start a new game.
+        handleNewGame();
+      }
+    };
 
-      loadGame();
-      // This useEffect should ONLY run once on startup.
-  }, [generateImage]);
+    loadGame();
+  }, [generateImage, handleNewGame]); // Added handleNewGame to dependency array
 
-  // Save to localStorage on change
+  // Save to device storage on change
   useEffect(() => {
-    if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
-      const stateToSave = {
-        ...gameState,
-        // Still remove the portrait to save space; it will be regenerated on load.
-        character: gameState.character
-          ? { ...gameState.character, portrait: '' }
-          : null,
-        // For the story log, only keep the illustration for the very last entry.
-        storyLog: gameState.storyLog.map((segment, index) => {
-          if (index === gameState.storyLog.length - 1) {
-            return segment; // This is the last segment, keep the illustration.
-          }
-          return { ...segment, illustration: '' }; // For all others, clear it.
-        }),
+      const saveGame = async () => {
+        if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
+          const stateToSave = {
+            ...gameState,
+            character: gameState.character
+              ? { ...gameState.character, portrait: '' }
+              : null,
+            storyLog: gameState.storyLog.map((segment, index) => {
+              if (index === gameState.storyLog.length - 1) {
+                return segment;
+              }
+              return { ...segment, illustration: '' };
+            }),
+          };
+          await Preferences.set({
+            key: 'endlessAdventureSave',
+            value: JSON.stringify({ gameState: stateToSave, creationData })
+          });
+        }
       };
-      localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
-    }
+      saveGame();
   }, [gameState, creationData]);
 
   const handleCreateCharacter = useCallback(async (details: CreationDetails) => {
