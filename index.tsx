@@ -151,10 +151,20 @@ const characterGenSchema = {
                     }
                 },
                 required: ['skillName', 'level']
-            }
+            },
+
+          }
+          startingEquipment: {
+              type: Type.OBJECT,
+              properties: {
+                  weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
+                  armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
+                  gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } } }, required: ['name', 'description', 'stats'] } }
+              },
+              required: ['weapon', 'armor', 'gear']
           }
         },
-        required: ['name', 'description', 'personality', 'skills']
+        required: ['name', 'description', 'personality', 'skills', 'startingEquipment']
       }
     },
     storyGuidance: {
@@ -183,9 +193,18 @@ const characterGenSchema = {
         },
         required: ['Combat', 'Magic', 'Utility']
     },
-    startingSkillPoints: { type: Type.INTEGER, description: "The number of points the player can initially spend on skills. Usually 5-7."}
+    startingSkillPoints: { type: Type.INTEGER, description: "The number of points the player can initially spend on skills. Usually 5-7."},
+    startingEquipment: {
+      type: Type.OBJECT,
+      properties: {
+          weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
+          armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
+          gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } } }, required: ['name', 'description', 'stats'] } }
+      },
+      required: ['weapon', 'armor', 'gear']
+    }
   },
-  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companions']
+  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companions', 'startingEquipment']
 };
 
 
@@ -551,14 +570,19 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     <h3>Equipment</h3>
                     <ul className="skills-list">
                       <li>
-                        Weapon: {character.equipment.weapon?.name} <span className="skill-level">DMG: {character.equipment.weapon?.stats.damage}</span>
+                        🗡️Weapon: {character.equipment.weapon?.name} <span className="skill-level">DMG: {character.equipment.weapon?.stats.damage}</span>
                       </li>
                       <li>
-                        Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
+                        🛡Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
                       </li>
                       {character.equipment.gear && character.equipment.gear.map(gear => (
                         <li key={gear.name}>
-                          {gear.name} <span className="skill-level">...stats...</span>
+                          {gear.name}
+                          <span className="skill-level">
+                            {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
+                            {gear.stats.damage && gear.stats.damageReduction ? ' | ' : ''}
+                            {gear.stats.damageReduction ? `DR: ${gear.stats.damageReduction}` : ''}
+                          </span>
                         </li>
                       ))}
                     </ul>
@@ -747,6 +771,7 @@ const App = () => {
             - Desired Campaign Type: ${campaign}
 
             Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
+            Generate a set of starting equipment (weapon, armor, and a few pieces of gear) for the character and their companions, making it unique and appropriate to their class and background. The equipment should have a name, a short description, and stats like damage or damage reduction. The companion equipment should be stored as 'startingEquipment' under each companion object. The player character's starting equipment should be stored under 'startingEquipment' at the root level of the JSON response.
         `;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -782,7 +807,8 @@ const App = () => {
             storyGuidance: data.storyGuidance,
             initialStory: data.initialStory,
             skillPools: data.skillPools,
-            startingSkillPoints: data.startingSkillPoints
+            startingSkillPoints: data.startingSkillPoints,
+            startingEquipment: data.startingEquipment,
         });
         setGameState(g => ({...g, companions: initialCompanions, gameStatus: 'characterCustomize'}));
 
@@ -815,11 +841,7 @@ const App = () => {
             description: creationData.description,
             portrait: portrait,
             reputation: {},
-            equipment: {
-              weapon: { name: "Rusty Dagger", description: "A simple, old dagger.", stats: { damage: 5 } },
-              armor: { name: "Worn Leather", description: "Basic leather armor.", stats: { damageReduction: 2 } },
-              gear: [],
-            },
+            equipment: creationData.startingEquipment
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
 
