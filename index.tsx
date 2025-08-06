@@ -153,7 +153,7 @@ const characterGenSchema = {
                 required: ['skillName', 'level']
             },
 
-          }
+          },
           startingEquipment: {
               type: Type.OBJECT,
               properties: {
