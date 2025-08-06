@@ -34,6 +34,11 @@ interface Character {
   portrait: string; // base64 image
   storySummary?: string;
   reputation: { [key: string]: number };
+  equipment: {
+    weapon: Equipment | null;
+    armor: Equipment | null;
+    gear: Equipment[] | null;
+  };
 }
 
 interface StorySegment {
@@ -94,6 +99,16 @@ interface CreationDetails {
     characterClass: string;
     background: string;
     campaign: string; 
+}
+
+interface Equipment {
+  name: string;
+  description: string;
+  stats: {
+    damage?: number;
+    damageReduction?: number;
+    // You can add more stats here, like magical effects, etc.
+  };
 }
 
 
@@ -533,6 +548,21 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         ))}
                     </ul>
 
+                    <h3>Equipment</h3>
+                    <ul className="skills-list">
+                      <li>
+                        Weapon: {character.equipment.weapon?.name} <span className="skill-level">DMG: {character.equipment.weapon?.stats.damage}</span>
+                      </li>
+                      <li>
+                        Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
+                      </li>
+                      {character.equipment.gear && character.equipment.gear.map(gear => (
+                        <li key={gear.name}>
+                          {gear.name} <span className="skill-level">...stats...</span>
+                        </li>
+                      ))}
+                    </ul>
+
 
                     <h3>Party</h3>
                     <ul className="skills-list">
@@ -703,7 +733,7 @@ const App = () => {
     setApiIsLoading(true);
     setGameState(g => ({...g, gameStatus: 'loading'}));
 
-    const { name, gender, race, characterClass, background } = details;
+    const { name, gender, race, characterClass, background, campaign } = details;
 
     try {
         const prompt = `
@@ -784,7 +814,12 @@ const App = () => {
             skillPoints: 0,
             description: creationData.description,
             portrait: portrait,
-            reputation: {}
+            reputation: {},
+            equipment: {
+              weapon: { name: "Rusty Dagger", description: "A simple, old dagger.", stats: { damage: 5 } },
+              armor: { name: "Worn Leather", description: "Basic leather armor.", stats: { damageReduction: 2 } },
+              gear: [],
+            },
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
 
@@ -836,6 +871,10 @@ const App = () => {
             ${companionsDetails}
             Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
             Description: ${gameState.character.description}
+            Equipment:
+            - Weapon: ${gameState.character.equipment.weapon?.name} (Damage: ${gameState.character.equipment.weapon?.stats.damage})
+            - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
+            - Gear: ${gameState.character.equipment.gear?.map(g => g.name).join(', ')}
 
             CHARACTER STORY SUMMARY (What happened before the most recent events):
             ---
