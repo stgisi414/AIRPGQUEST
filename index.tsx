@@ -94,7 +94,7 @@ interface CreationDetails {
     race: string;
     characterClass: string;
     background: string;
-    campaign: string; 
+    campaign: string;
 }
 
 
@@ -127,7 +127,7 @@ const characterGenSchema = {
             items: {
                 type: Type.OBJECT,
                 properties: {
-                    skillName: { 
+                    skillName: {
                         type: Type.STRING,
                         description: "The name of the skill (e.g., 'Swords', 'Alchemy')."
                     },
@@ -201,7 +201,7 @@ const nextStepSchema = {
                     type: Type.OBJECT,
                     description: "If a new companion can be recruited in this story segment, describe them here. Otherwise, this should be null.",
                     nullable: true,
-                    properties: { 
+                    properties: {
                         name: { type: Type.STRING },
                         description: { type: Type.STRING },
                         personality: { type: Type.STRING },
@@ -212,7 +212,7 @@ const nextStepSchema = {
                             items: {
                                 type: Type.OBJECT,
                                 properties: {
-                                    skillName: { 
+                                    skillName: {
                                         type: Type.STRING,
                                         description: "The name of the skill."
                                     },
@@ -251,6 +251,54 @@ const storySummarySchema = {
 const RACES = ["Human", "Elf", "Dwarf", "Orc", "Halfling", "Gnome", "Dragonborn", "Tiefling", "Half-Elf"];
 const CLASSES = ["Warrior", "Paladin", "Ranger", "Rogue", "Monk", "Barbarian", "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard", "Artificer", "Blood Hunter", "Death Knight", "Demon Hunter", "Spellblade", "Necromancer", "Summoner", "Elementalist", "Shaman", "Templar", "Assassin", "Swashbuckler", "Gunslinger", "Alchemist", "Berserker", "Gladiator", "Scout", "Inquisitor"];
 const BACKGROUNDS = ["Commoner", "Noble", "Royalty", "Magical Family", "Farmer", "Soldier", "Criminal", "Sage", "Artisan", "Entertainer", "Hermit", "Outcast", "Merchant", "Acolyte", "Urchin"];
+
+// --- HELPER FUNCTIONS for AUDIO ---
+// Decodes base64 string to ArrayBuffer
+const base64ToArrayBuffer = (base64: string) => {
+    const binaryString = window.atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+};
+
+// Converts PCM data to a WAV file Blob
+const pcmToWav = (pcmData: Int16Array, sampleRate: number): Blob => {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+    const dataSize = pcmData.length * (bitsPerSample / 8);
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    // RIFF header
+    view.setUint32(0, 0x52494646, false); // "RIFF"
+    view.setUint32(4, 36 + dataSize, true);
+    view.setUint32(8, 0x57415645, false); // "WAVE"
+
+    // "fmt " sub-chunk
+    view.setUint32(12, 0x666d7420, false); // "fmt "
+    view.setUint32(16, 16, true); // Sub-chunk size
+    view.setUint16(20, 1, true); // Audio format (1 for PCM)
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+
+    // "data" sub-chunk
+    view.setUint32(36, 0x64617461, false); // "data"
+    view.setUint32(40, dataSize, true);
+
+    // Write PCM data
+    const pcmAsBytes = new Int16Array(buffer, 44);
+    pcmAsBytes.set(pcmData);
+
+    return new Blob([view], { type: 'audio/wav' });
+};
 
 
 // --- UI COMPONENTS ---
@@ -368,8 +416,7 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
                 </select>
             </div>
         </div>
-        
-        
+
 
 
         <button type="submit" disabled={isLoading || !name.trim()}>
@@ -401,7 +448,7 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
             setPoints(p => p - change);
         }
     }
-    
+
     const allSkills = Object.values(skillPools).flat();
     const learnedSkills = Object.keys(skills);
     const unlearnedSkills = allSkills.filter(s => !learnedSkills.includes(s));
@@ -451,60 +498,100 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
 
 const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void}) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const audioRef = useRef<HTMLAudioElement>(null);
 
-    // Defensive check to prevent crashes if the component tries to render too early.
     if (!gameState.character || gameState.storyLog.length === 0) {
         return <Loader text="Loading game..." />;
     }
 
-    // Destructure gameState to provide default values, making the component more resilient.
     const { character, storyLog, currentActions, companions = [] } = gameState;
     const { name, hp, xp, skillPoints, portrait, skills = {}, gender } = character;
     const currentScene = storyLog[storyLog.length - 1];
 
     useEffect(() => {
-        // Ensure voices are loaded. This is sometimes necessary for browsers.
-        speechSynthesis.onvoiceschanged = () => {};
-        // When the scene changes or component unmounts, stop any ongoing speech.
-        return () => {
-            if (speechSynthesis.speaking) {
-                speechSynthesis.cancel();
-                setIsSpeaking(false);
+        if (audioUrl && audioRef.current) {
+            audioRef.current.play();
+        }
+    }, [audioUrl]);
+
+    const handlePlayAudio = async (text: string) => {
+        if (isSpeaking) {
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.currentTime = 0;
             }
-        };
-    }, [currentScene]);
-
-
-    const handlePlayAudio = (text: string, gender: string) => {
-        if (speechSynthesis.speaking) {
-            speechSynthesis.cancel();
             setIsSpeaking(false);
+            setAudioUrl(null);
             return;
         }
 
-        const utterance = new SpeechSynthesisUtterance(text);
-        const voices = speechSynthesis.getVoices();
-        let selectedVoice = null;
+        setIsSpeaking(true);
 
-        if (gender === 'Male') {
-            selectedVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Male')) || voices.find(v => v.lang.startsWith('en'));
-        } else { // Female
-            selectedVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Female')) || voices.find(v => v.lang.startsWith('en'));
+        try {
+            const payload = {
+                contents: [{
+                    parts: [{ text: `Say in a clear, narrative voice: ${text}` }]
+                }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: gender === 'Male' ? 'Kore' : 'Puck' }
+                        }
+                    }
+                },
+                model: "gemini-2.5-flash-preview-tts"
+            };
+            const apiKey = process.env.API_KEY || "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`API request failed with status ${response.status}`);
+            }
+
+            const result = await response.json();
+            const part = result?.candidates?.[0]?.content?.parts?.[0];
+            const audioData = part?.inlineData?.data;
+            const mimeType = part?.inlineData?.mimeType;
+
+            if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+                const pcmData = base64ToArrayBuffer(audioData);
+                const pcm16 = new Int16Array(pcmData);
+                const wavBlob = pcmToWav(pcm16, sampleRate);
+                const newAudioUrl = URL.createObjectURL(wavBlob);
+                setAudioUrl(newAudioUrl);
+            } else {
+                throw new Error("Invalid audio data in API response");
+            }
+        } catch (error) {
+            console.error("TTS generation failed:", error);
+            setIsSpeaking(false);
         }
-
-        if (selectedVoice) {
-            utterance.voice = selectedVoice;
-        }
-        
-        utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
-
-        speechSynthesis.speak(utterance);
     };
 
     return (
         <div className="game-container">
+            <audio
+                ref={audioRef}
+                src={audioUrl || ''}
+                onEnded={() => {
+                    setIsSpeaking(false);
+                    setAudioUrl(null);
+                }}
+                onError={() => {
+                    setIsSpeaking(false);
+                    setAudioUrl(null);
+                }}
+            />
             <header className="game-header">
                 <h1><img src="/ea-logo.png" />&nbsp;Endless Adventure</h1>
                 <button onClick={onNewGame} className="new-game-btn">Start New Game</button>
@@ -562,8 +649,9 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     <div className="story-text">
                         <button
                             className="play-audio-btn"
-                            onClick={() => handlePlayAudio(currentScene.text, gender)}
+                            onClick={() => handlePlayAudio(currentScene.text)}
                             aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
+                            disabled={isSpeaking && !audioUrl} // Disable if currently fetching audio
                         >
                             {isSpeaking ? '⏹️' : '▶️'}
                         </button>
@@ -607,7 +695,7 @@ const App = () => {
     try {
         const response = await ai.models.generateImages({
             model: 'imagen-3.0-generate-002',
-            prompt: `headshot portrait, character bust, fantasy art, digital painting, centered, fancy background. no body. ${prompt}`,
+            prompt: `fantasy art, digital painting. ${prompt}`,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
@@ -640,7 +728,7 @@ const App = () => {
       }));
   }, [setGameState, setCreationData]); // Add dependencies
 
-  // Load from localStorage on startup
+  // Load from device storage on startup
   useEffect(() => {
     const loadGame = async () => {
       try {
@@ -679,38 +767,38 @@ const App = () => {
     };
 
     loadGame();
-  }, [generateImage, handleNewGame]); // Added handleNewGame to dependency array
+  }, [generateImage, handleNewGame]);
 
   // Save to device storage on change
   useEffect(() => {
-      const saveGame = async () => {
-        if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
-          const stateToSave = {
-            ...gameState,
-            character: gameState.character
-              ? { ...gameState.character, portrait: '' }
-              : null,
-            storyLog: gameState.storyLog.map((segment, index) => {
-              if (index === gameState.storyLog.length - 1) {
-                return segment;
-              }
-              return { ...segment, illustration: '' };
-            }),
-          };
-          await Preferences.set({
-            key: 'endlessAdventureSave',
-            value: JSON.stringify({ gameState: stateToSave, creationData })
-          });
-        }
-      };
-      saveGame();
+    const saveGame = async () => {
+      if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
+        const stateToSave = {
+          ...gameState,
+          character: gameState.character
+            ? { ...gameState.character, portrait: '' }
+            : null,
+          storyLog: gameState.storyLog.map((segment, index) => {
+            if (index === gameState.storyLog.length - 1) {
+              return segment;
+            }
+            return { ...segment, illustration: '' };
+          }),
+        };
+        await Preferences.set({
+          key: 'endlessAdventureSave',
+          value: JSON.stringify({ gameState: stateToSave, creationData })
+        });
+      }
+    };
+    saveGame();
   }, [gameState, creationData]);
 
   const handleCreateCharacter = useCallback(async (details: CreationDetails) => {
     setApiIsLoading(true);
     setGameState(g => ({...g, gameStatus: 'loading'}));
 
-    const { name, gender, race, characterClass, background } = details;
+    const { name, gender, race, characterClass, background, campaign } = details;
 
     try {
         const prompt = `
@@ -721,24 +809,25 @@ const App = () => {
             - Race: ${race}
             - Class: ${characterClass}
             - Background: ${background}
-            - Desired Campaign Type: ${details.campaign}
+            - Desired Campaign Type: ${campaign}
 
             Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
         `;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: characterGenSchema,
-                safetySettings: safetySettings,
             },
+            safetySettings: safetySettings,
         });
 
-        const data = JSON.parse(response.text);
+        const responseText = await response.response.text();
+        const data = JSON.parse(responseText);
+
 
         const initialCompanions: Companion[] = data.companions.map((comp: any) => {
-            // Transform the skills array from the API into a key-value object
             const skillsObject = comp.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                 acc[skill.skillName] = skill.level;
                 return acc;
@@ -746,12 +835,12 @@ const App = () => {
 
             return {
                 ...comp,
-                skills: skillsObject, // Replace the array with the new object
+                skills: skillsObject,
                 relationship: 0
             };
         });
 
-        
+
         setCreationData({
             name: data.character.name,
             gender: details.gender,
@@ -791,7 +880,7 @@ const App = () => {
             skillPoints: 0,
             description: creationData.description,
             portrait: portrait,
-            storySummary: "The adventure is just beginning...", // This line is added
+            storySummary: "The adventure is just beginning...",
             reputation: {}
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
@@ -864,15 +953,16 @@ const App = () => {
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: nextStepSchema,
-                safetySettings: safetySettings,
             },
+            safetySettings: safetySettings,
         });
-        
-        const data = JSON.parse(response.text).story;
+
+        const responseText = await response.response.text();
+        const data = JSON.parse(responseText).story;
         const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
         const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
 
@@ -884,7 +974,7 @@ const App = () => {
             const newReputation = { ...prevState.character.reputation };
             if (data.reputationChange) {
                 for (const [faction, change] of Object.entries(data.reputationChange)) {
-                    newReputation[faction] = (newReputation[faction] || 0) + change;
+                    newReputation[faction] = (newReputation[faction] || 0) + (change as number);
                 }
             }
             const updatedCharacter = {
@@ -906,11 +996,8 @@ const App = () => {
                 }
             }
 
-            // Handle adding a new companion if one was generated and recruited
-            // (We assume an action like "Recruit [name]" would trigger this)
             if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                  if (updatedCompanions.length < 5) {
-                    // Transform the skills array into a key-value object
                     const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                         acc[skill.skillName] = skill.level;
                         return acc;
@@ -918,8 +1005,8 @@ const App = () => {
 
                      const companionToAdd: Companion = {
                          ...data.newCompanion,
-                         skills: skillsObject, // Use the transformed skills object
-                         relationship: 20 
+                         skills: skillsObject,
+                         relationship: 20
                      };
                      updatedCompanions.push(companionToAdd);
                  }
@@ -962,15 +1049,15 @@ const App = () => {
 
             const summaryResponse = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: summaryPrompt,
-                config: {
+                contents: [{ parts: [{ text: summaryPrompt }] }],
+                generationConfig: {
                     responseMimeType: "application/json",
                     responseSchema: storySummarySchema,
-                    safetySettings: safetySettings
                 },
+                safetySettings: safetySettings
             });
-
-            const summaryData = JSON.parse(summaryResponse.text);
+            const summaryText = await summaryResponse.response.text();
+            const summaryData = JSON.parse(summaryText);
 
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
@@ -990,7 +1077,7 @@ const App = () => {
           setApiIsLoading(false);
       }
   }, [gameState, generateImage]);
-  
+
   const handleCustomActionSubmit = (action: string) => {
       setIsCustomActionModalOpen(false);
       handleAction(action);
@@ -999,7 +1086,7 @@ const App = () => {
   const handleLevelUpComplete = (updatedSkills: {[key: string]: number}) => {
       setGameState(g => {
         if (!g.character) return g;
-        
+
         const pointsSpent = Object.values(updatedSkills).reduce((sum, level) => sum + level, 0) - Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
 
         return {
@@ -1017,11 +1104,11 @@ const App = () => {
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'playing':
-        return <GameScreen 
-                    gameState={gameState} 
-                    onAction={handleAction} 
-                    onNewGame={handleNewGame} 
-                    onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} 
+        return <GameScreen
+                    gameState={gameState}
+                    onAction={handleAction}
+                    onNewGame={handleNewGame}
+                    onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
                     isLoading={apiIsLoading}
                     onCustomActionClick={() => setIsCustomActionModalOpen(true)}
                 />;
