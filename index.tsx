@@ -261,7 +261,23 @@ const nextStepSchema = {
                 },
                 reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } },
                 newWeather: { type: Type.STRING, description: "The new weather condition (e.g., 'Clear Skies', 'Light Rain', 'Snowing')." },
-                newTimeOfDay: { type: Type.STRING, description: "The new time of day (e.g., 'Morning', 'Afternoon', 'Night')." }
+                newTimeOfDay: { type: Type.STRING, description: "The new time of day (e.g., 'Morning', 'Afternoon', 'Night')." },
+                equipmentUpdates: {
+                    type: Type.ARRAY,
+                    description: "An array of equipment updates. Each object specifies the slot and the new equipment to be assigned.",
+                    nullable: true,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            slot: { type: Type.STRING, description: "The equipment slot to update (e.g., 'weapon', 'armor', or 'gear')." },
+                            name: { type: Type.STRING, description: "The new name for the equipment." },
+                            description: { type: Type.STRING, description: "The new description for the equipment." },
+                            stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } },
+                            action: { type: Type.STRING, description: "The action to perform on the equipment (e.g., 'add', 'remove', 'replace', 'update')." }
+                        },
+                        required: ['slot', 'name', 'description', 'stats', 'action']
+                    }
+                }
             },
             required: ['text', 'actions', 'didHpChange', 'didXpChange', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
         }
@@ -870,15 +886,17 @@ const App = () => {
 
 
   const handleAction = useCallback(async (action: string) => {
-      if (!gameState.character || !gameState.storyGuidance) return;
-      setApiIsLoading(true);
+    if (!gameState.character || !gameState.storyGuidance) return;
+    setApiIsLoading(true);
 
-      try {
-          const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
-          const companionsDetails = gameState.companions.map(c =>
+    try {
+        const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+        const companionsDetails = gameState.companions.map(c =>
             `  - Name: ${c.name}, Personality: ${c.personality}, Relationship: ${c.relationship}`
-          ).join('\n');
-          const prompt = `
+        ).join('\n');
+
+        // Update the prompt to tell the AI about the new equipmentUpdates field
+        const prompt = `
             Continue this text adventure.
             STORY GUIDANCE:
             Setting: ${gameState.storyGuidance.setting}
@@ -916,8 +934,8 @@ const App = () => {
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
             Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
-
-          `;
+            Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
+        `;
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -944,14 +962,37 @@ const App = () => {
                     newReputation[faction] = (newReputation[faction] || 0) + change;
                 }
             }
+            
+            // Handle equipment updates
+            const updatedEquipment = { ...prevState.character.equipment };
+            if (data.equipmentUpdates) {
+                for (const update of data.equipmentUpdates) {
+                    const newEquipmentItem: Equipment = {
+                        name: update.name,
+                        description: update.description,
+                        stats: update.stats
+                    };
+                    if (update.slot === 'weapon') {
+                        updatedEquipment.weapon = newEquipmentItem;
+                    } else if (update.slot === 'armor') {
+                        updatedEquipment.armor = newEquipmentItem;
+                    } else if (update.slot === 'gear') {
+                        // This assumes 'add' is the only action for 'gear' for simplicity
+                        if (update.action === 'add') {
+                             updatedEquipment.gear = [...(updatedEquipment.gear || []), newEquipmentItem];
+                        }
+                    }
+                }
+            }
+            
             const updatedCharacter = {
                 ...prevState.character,
                 hp: prevState.character.hp + data.didHpChange,
                 xp: newXp,
                 skillPoints: prevState.character.skillPoints + earnedSkillPoints,
-                reputation: newReputation
+                reputation: newReputation,
+                equipment: updatedEquipment,
             };
-
 
             const updatedCompanions = [...prevState.companions];
             if (data.companionUpdates) {
@@ -963,11 +1004,9 @@ const App = () => {
                 }
             }
 
-            // Handle adding a new companion if one was generated and recruited
-            // (We assume an action like "Recruit [name]" would trigger this)
+            // Handle adding a new companion
             if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                  if (updatedCompanions.length < 5) {
-                    // Transform the skills array into a key-value object
                     const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                         acc[skill.skillName] = skill.level;
                         return acc;
@@ -975,7 +1014,7 @@ const App = () => {
 
                      const companionToAdd: Companion = {
                          ...data.newCompanion,
-                         skills: skillsObject, // Use the transformed skills object
+                         skills: skillsObject,
                          relationship: 20 
                      };
                      updatedCompanions.push(companionToAdd);
@@ -993,6 +1032,7 @@ const App = () => {
             };
         });
 
+        // ... rest of the function for generating story summary
         const newStoryLogLength = gameState.storyLog.length + 1;
         if (newStoryLogLength > 0 && newStoryLogLength % 10 === 0) {
             const oldSummary = gameState.character?.storySummary || "The story has just begun.";
@@ -1041,11 +1081,11 @@ const App = () => {
             });
         }
 
-      } catch (error) {
-          console.error("Action handling failed:", error);
-      } finally {
-          setApiIsLoading(false);
-      }
+    } catch (error) {
+        console.error("Action handling failed:", error);
+    } finally {
+        setApiIsLoading(false);
+    }
   }, [gameState, generateImage]);
   
   const handleCustomActionSubmit = (action: string) => {
