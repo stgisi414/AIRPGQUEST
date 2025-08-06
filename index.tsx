@@ -567,25 +567,29 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         ))}
                     </ul>
 
-                    <h3>Equipment</h3>
-                    <ul className="skills-list">
-                      <li>
-                        🗡️Weapon: {character.equipment.weapon?.name} <span className="skill-level">DMG: {character.equipment.weapon?.stats.damage}</span>
-                      </li>
-                      <li>
-                        🛡Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
-                      </li>
-                      {character.equipment.gear && character.equipment.gear.map(gear => (
-                        <li key={gear.name}>
-                          {gear.name}
-                          <span className="skill-level">
-                            {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
-                            {gear.stats.damage && gear.stats.damageReduction ? ' | ' : ''}
-                            {gear.stats.damageReduction ? `DR: ${gear.stats.damageReduction}` : ''}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                    {character.equipment && ( // <-- Add this check here
+                      <>
+                        <h3>Equipment</h3>
+                        <ul className="skills-list">
+                          <li>
+                            🗡️Weapon: {character.equipment.weapon?.name} <span className="skill-level">DMG: {character.equipment.weapon?.stats.damage}</span>
+                          </li>
+                          <li>
+                            🛡️Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
+                          </li>
+                          {character.equipment.gear && character.equipment.gear.map(gear => (
+                            <li key={gear.name}>
+                              {gear.name}
+                              <span className="skill-level">
+                                {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
+                                {gear.stats.damage && gear.stats.damageReduction ? ' | ' : ''}
+                                {gear.stats.damageReduction ? `DR: ${gear.stats.damageReduction}` : ''}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
 
 
                     <h3>Party</h3>
