@@ -923,7 +923,6 @@ const App = () => {
             `  - Name: ${c.name}, Personality: ${c.personality}, Relationship: ${c.relationship}`
         ).join('\n');
 
-        // Update the prompt to tell the AI about the new equipmentUpdates field
         const prompt = `
             Continue this text adventure.
             STORY GUIDANCE:
@@ -961,6 +960,7 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
+            If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check against a difficulty. The player's skill level should influence the success. Populate the 'skillCheck' field with the results. The 'text' field should narrate the outcome of the skill check.
             Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
             Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
         `;
@@ -977,7 +977,11 @@ const App = () => {
 
         const data = JSON.parse(response.text).story;
         const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
-        const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
+        const newSegment: StorySegment = {
+            text: data.text,
+            illustration: newIllustration,
+            skillCheck: data.skillCheck // <-- Save the skill check data
+        };
 
         setGameState(prevState => {
             if (!prevState.character) return prevState;
@@ -1022,7 +1026,7 @@ const App = () => {
                 equipment: updatedEquipment,
             };
 
-            let updatedCompanions = [...prevState.companions];
+            const updatedCompanions = [...prevState.companions];
             if (data.companionUpdates) {
                 for (const update of data.companionUpdates) {
                     const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
@@ -1032,8 +1036,7 @@ const App = () => {
                 }
             }
 
-            // Check if the player is trying to recruit a new companion
-            // This is the updated logic
+            // Handle adding a new companion
             if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                  if (updatedCompanions.length < 5) {
                     const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
