@@ -788,6 +788,7 @@ const App = () => {
             skillPoints: 0,
             description: creationData.description,
             portrait: portrait,
+            storySummary: "The adventure is just beginning...", // This line is added
             reputation: {}
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
