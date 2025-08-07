@@ -1288,14 +1288,14 @@ const App = () => {
         - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
 
         ENEMIES:
-        ${gameState.combat.enemies.map(e => `- ${e.name} (HP: ${e.hp})`).join('\n')}
+        ${gameState.combat.enemies.map(e => `- ID: ${e.id}, Name: ${e.name} (HP: ${e.hp})`).join('\n')}
 
         TASK:
         Process the player's action and the enemies' turn. Return the result of the turn.
         - Base the damage dealt by the player on their weapon's damage stat.
         - When enemies attack the player, reduce the damage taken by the player's armor's damage reduction stat.
         - Describe what happens in the combat log. Be descriptive.
-        - Calculate HP changes for the player and enemies.
+        - Calculate HP changes for the player and enemies. For each enemy that takes damage, you MUST return an object in the 'enemyHpChanges' array with the correct 'id' and the negative hpChange value.
         - Provide a new list of 3-4 available actions for the player's next turn.
         - If all enemies are defeated, set combatOver to true, provide victory text and XP gained.
     `;
