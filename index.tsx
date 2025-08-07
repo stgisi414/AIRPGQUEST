@@ -651,11 +651,11 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {character.name === "Cinderblaze" && (
+                    {/* {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
                             Sync HP to Level 16
                         </button>
-                    )}
+                    )} */}
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
@@ -757,13 +757,13 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
                     </div>
                     <span>HP: {character.hp} / {character.maxHp}</span>
                     
-                    {/* --- DEBUG BUTTON --- */}
+                    {/* --- DEBUG BUTTON --- 
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', marginTop: '1rem'}}>
                             Sync HP to Level 16
                         </button>
                     )}
-                    {/* --- END DEBUG BUTTON --- */}
+                     --- END DEBUG BUTTON --- */}
                 </div>
                 <div className="enemies-container">
                     {combat.enemies.map(enemy => (
