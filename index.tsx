@@ -27,6 +27,7 @@ interface Character {
   name: string;
   gender: string;
   hp: number;
+  maxHp: number;
   xp: number;
   skills: { [key: string]: number };
   skillPoints: number;
@@ -673,7 +674,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                               <span className="skill-level">
                                 {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
                                 {gear.stats.damage && gear.stats.damageReduction ? ' | ' : ''}
-                                {gear.stats.damageReduction ? `DR: {gear.stats.damageReduction}` : ''}
+                                {gear.stats.damageReduction ? `DR: ${gear.stats.damageReduction}` : ''}
                               </span>
                             </li>
                           ))}
@@ -741,17 +742,27 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading }: { gameState: Gam
             <header className="combat-header">
                 <h1>Combat!</h1>
             </header>
-            <div className="enemies-container">
-                {combat.enemies.map(enemy => (
-                    <div key={enemy.id} className={`enemy-card ${enemy.hp <= 0 ? 'defeated' : ''}`}>
-                        <img src={enemy.portrait} alt={enemy.name} className="enemy-portrait" />
-                        <h3>{enemy.name}</h3>
-                        <div className="enemy-hp-bar-container">
-                            <div className="enemy-hp-bar" style={{ width: `${(enemy.hp / enemy.maxHp) * 100}%` }}></div>
-                        </div>
-                        <span>HP: {enemy.hp} / {enemy.maxHp}</span>
+            <div className="combat-participants-container">
+                <div className="player-card">
+                    <img src={character.portrait} alt={character.name} className="character-portrait-combat" />
+                    <h3>{character.name}</h3>
+                    <div className="player-hp-bar-container">
+                        <div className="player-hp-bar" style={{ width: `${(character.hp / character.maxHp) * 100}%` }}></div>
                     </div>
-                ))}
+                    <span>HP: {character.hp} / {character.maxHp}</span>
+                </div>
+                <div className="enemies-container">
+                    {combat.enemies.map(enemy => (
+                        <div key={enemy.id} className={`enemy-card ${enemy.hp <= 0 ? 'defeated' : ''}`}>
+                            <img src={enemy.portrait} alt={enemy.name} className="enemy-portrait" />
+                            <h3>{enemy.name}</h3>
+                            <div className="enemy-hp-bar-container">
+                                <div className="enemy-hp-bar" style={{ width: `${(enemy.hp / enemy.maxHp) * 100}%` }}></div>
+                            </div>
+                            <span>HP: {enemy.hp} / {enemy.maxHp}</span>
+                        </div>
+                    ))}
+                </div>
             </div>
             <div className="combat-log-container">
                 {combat.log.map((entry, index) => (
@@ -983,6 +994,7 @@ const App = () => {
             name: creationData.name,
             gender: creationData.gender,
             hp: 100,
+            maxHp: 100,
             xp: 0,
             skills: chosenSkills,
             skillPoints: 0,
@@ -1256,15 +1268,26 @@ const App = () => {
     const prompt = `
         You are the dungeon master in a text-based RPG. The player is in combat.
         Player's action: "${action}"
-        Character: ${gameState.character.name} (HP: ${gameState.character.hp})
-        Skills: ${Object.keys(gameState.character.skills).join(', ')}
-        Enemies: ${gameState.combat.enemies.map(e => `${e.name} (HP: ${e.hp})`).join(', ')}
 
+        CHARACTER:
+        Name: ${gameState.character.name}
+        HP: ${gameState.character.hp}
+        Skills: ${Object.keys(gameState.character.skills).join(', ')}
+        Equipment:
+        - Weapon: ${gameState.character.equipment.weapon?.name} (Damage: ${gameState.character.equipment.weapon?.stats.damage})
+        - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
+
+        ENEMIES:
+        ${gameState.combat.enemies.map(e => `- ${e.name} (HP: ${e.hp})`).join('\n')}
+
+        TASK:
         Process the player's action and the enemies' turn. Return the result of the turn.
-        - Describe what happens in the combat log.
-        - Calculate HP changes for player and enemies.
-        - Provide new actions for the player's next turn.
-        - If all enemies are defeated, set combatOver to true.
+        - Base the damage dealt by the player on their weapon's damage stat.
+        - When enemies attack the player, reduce the damage taken by the player's armor's damage reduction stat.
+        - Describe what happens in the combat log. Be descriptive.
+        - Calculate HP changes for the player and enemies.
+        - Provide a new list of 3-4 available actions for the player's next turn.
+        - If all enemies are defeated, set combatOver to true, provide victory text and XP gained.
     `;
 
     try {
@@ -1294,7 +1317,7 @@ const App = () => {
 
             const newPlayerHp = prevState.character.hp + data.playerHpChange;
             if (newPlayerHp <= 0) {
-                return { ...prevState, gameStatus: 'gameOver' };
+                return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
             }
 
             if (data.combatOver) {
@@ -1311,7 +1334,8 @@ const App = () => {
                     },
                     gameStatus: 'playing',
                     combat: null,
-                    currentActions: [data.victoryText, 'Continue exploring.'],
+                    storyLog: [...prevState.storyLog, { text: data.victoryText, illustration: '' }],
+                    currentActions: ['Continue exploring.'],
                 };
             }
 
