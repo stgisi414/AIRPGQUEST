@@ -1536,44 +1536,39 @@ const App = () => {
     if (!gameState.character || !gameState.combat) return;
     setApiIsLoading(true);
 
-    const prompt = `
-        You are the dungeon master in a text-based RPG. The player is in combat.
-        Player's action: "${action}"
-
-        CHARACTER:
-        Name: ${gameState.character.name}
-        HP: ${gameState.character.hp}
-        Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
-        Equipment:
-        - Weapon: ${gameState.character.equipment.weapon?.name} (Damage: ${gameState.character.equipment.weapon?.stats.damage})
-        - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
-
-        ENEMIES:
-        ${gameState.combat.enemies.map(e => `- ID: ${e.id}, Name: ${e.name} (HP: ${e.hp})`).join('\n')}
-
-        TASK:
-        Process the player's action and the enemies' turn. Return the result of the turn.
-        - When the player attacks, determine the most relevant combat skill from their skill list (e.g., 'Swords', 'Archery', 'Fire Magic').
-        - Calculate a damage multiplier based on the level of that skill. The formula for the multiplier is as follows:
-          - Level 1: 1x
-          - Level 2: 1.2x
-          - Level 3: 1.4x
-          - Level 4: 1.8x
-          - Level 5: 2.6x
-          - Level 6: 4.2x
-          - For levels above 6, the difference from the previous multiplier doubles each time. (e.g., Level 7 is 4.2 + (1.6 * 2) = 7.4x)
-        - The final damage should be the weapon's damage stat multiplied by this skill level multiplier, then rounded to the nearest whole number.
-        - When enemies attack the player, reduce the damage taken by the player's armor's damage reduction stat.
-        - Describe what happens in the combat log. Be descriptive and reflect the power of high-level attacks. For example, a high-level sword strike shouldn't just "hit", it should "cleave through the goblin's defenses with a flash of steel."
-        - Calculate HP changes for the player and enemies. For each enemy that takes damage, you MUST return an object in the 'enemyHpChanges' array with the correct 'id' and the negative hpChange value.
-        - Provide a new list of 3-4 available actions for the player's next turn.
-        - If all enemies are defeated, set combatOver to true, provide victory text, XP gained, and any loot (gold and items).
-    `;
-
     try {
+        const initialPrompt = `
+            You are the dungeon master in a text-based RPG. The player is in combat.
+            Player's action: "${action}"
+
+            CHARACTER:
+            Name: ${gameState.character.name}
+            HP: ${gameState.character.hp}
+            Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
+            Equipment:
+            - Weapon: ${gameState.character.equipment.weapon?.name} (Damage: ${gameState.character.equipment.weapon?.stats.damage})
+            - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
+
+            ENEMIES:
+            ${gameState.combat.enemies.map(e => `- ID: ${e.id}, Name: ${e.name} (HP: ${e.hp})`).join('\n')}
+
+            TASK:
+            Process the player's action and the enemies' turn. Return the result of the turn.
+            - When the player attacks, determine the most relevant combat skill from their skill list.
+            - Calculate a damage multiplier based on the level of that skill. The formula for the multiplier is as follows:
+              - Level 1: 1x, Level 2: 1.2x, Level 3: 1.4x, Level 4: 1.8x, Level 5: 2.6x, Level 6: 4.2x
+              - For levels above 6, the difference from the previous multiplier doubles each time. (e.g., Level 7 is 4.2 + (1.6 * 2) = 7.4x)
+            - The final damage should be the weapon's damage stat multiplied by this skill level multiplier, rounded to the nearest whole number.
+            - When enemies attack the player, reduce the damage taken by the player's armor's damage reduction stat.
+            - Describe what happens in the combat log. Be descriptive and reflect the power of high-level attacks.
+            - Calculate HP changes for the player and all enemies.
+            - Provide a new list of 3-4 available actions for the player's next turn.
+            - IMPORTANT: Determine if the combat is over ONLY if the player is defeated. Do NOT set combatOver to true if only the enemies are defeated; the game client will handle that check.
+        `;
+
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: prompt,
+            contents: initialPrompt,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: combatActionSchema,
@@ -1583,24 +1578,47 @@ const App = () => {
 
         const data = JSON.parse(response.text).combatResult;
 
-        if (data.combatOver) {
-            const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`);
-            const victorySegment: StorySegment = {
-                text: data.victoryText || "You are victorious!",
-                illustration: victoryIllustration,
-            };
+        // --- Client-Side Victory Check ---
+        const newEnemies = [...gameState.combat.enemies];
+        data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
+            const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
+            if (enemyIndex !== -1) {
+                newEnemies[enemyIndex].hp += change.hpChange;
+            }
+        });
+
+        const newPlayerHp = gameState.character.hp + data.playerHpChange;
+        if (newPlayerHp <= 0) {
+            setGameState(prevState => ({ ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' }));
+            return;
+        }
+
+        const allEnemiesDefeated = newEnemies.every(e => e.hp <= 0);
+
+        if (allEnemiesDefeated) {
+            const victoryPrompt = `
+                The player, ${gameState.character.name}, has just won a battle.
+                The combat is over. Generate a JSON object using the 'combatResult' schema with the following properties:
+                - "combatOver": true
+                - "victoryText": A short, epic description of the victory.
+                - "xpGained": A reasonable amount of XP for the win.
+                - "loot": An object containing "gold" and a list of "items" the player found.
+                - Set "log", "playerHpChange", "enemyHpChanges", and "availableActions" to empty or placeholder values (e.g., [], 0).
+            `;
+            const victoryResponse = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: victoryPrompt,
+                config: { responseMimeType: "application/json", responseSchema: combatActionSchema, safetySettings: safetySettings },
+            });
+            const victoryData = JSON.parse(victoryResponse.text).combatResult;
+            const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${victoryData.victoryText}`);
+            const victorySegment: StorySegment = { text: victoryData.victoryText || "You are victorious!", illustration: victoryIllustration };
 
             setGameState(prevState => {
-                if (!prevState.character || !prevState.combat) return prevState;
-                const newPlayerHp = prevState.character.hp + data.playerHpChange;
-                 if (newPlayerHp <= 0) {
-                    return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
-                }
-                const newXp = prevState.character.xp + (data.xpGained || 0);
+                if (!prevState.character) return prevState;
+                const newXp = prevState.character.xp + (victoryData.xpGained || 0);
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
-
-                const newLoot = data.loot || { gold: 0, items: [] };
-
+                const newLoot = victoryData.loot || { gold: 0, items: [] };
                 return {
                     ...prevState,
                     character: {
@@ -1609,10 +1627,7 @@ const App = () => {
                         xp: newXp,
                         skillPoints: prevState.character.skillPoints + earnedSkillPoints,
                         gold: prevState.character.gold + newLoot.gold,
-                        equipment: {
-                            ...prevState.character.equipment,
-                            gear: [...(prevState.character.equipment.gear || []), ...newLoot.items],
-                        },
+                        equipment: { ...prevState.character.equipment, gear: [...(prevState.character.equipment.gear || []), ...newLoot.items] },
                     },
                     gameStatus: 'looting',
                     combat: null,
@@ -1620,41 +1635,18 @@ const App = () => {
                     storyLog: [...prevState.storyLog, victorySegment]
                 };
             });
-
         } else {
-             setGameState(prevState => {
+            // Combat continues
+            setGameState(prevState => {
                 if (!prevState.character || !prevState.combat) return prevState;
-
                 const newLog: CombatLogEntry[] = data.log.map((message: string) => ({ type: 'info', message }));
-                const newEnemies = [...prevState.combat.enemies];
-                data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
-                    const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
-                    if (enemyIndex !== -1) {
-                        newEnemies[enemyIndex].hp += change.hpChange;
-                    }
-                });
-
-                const newPlayerHp = prevState.character.hp + data.playerHpChange;
-                if (newPlayerHp <= 0) {
-                    return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
-                }
-
                 return {
                     ...prevState,
-                    character: {
-                        ...prevState.character,
-                        hp: newPlayerHp,
-                    },
-                    combat: {
-                        ...prevState.combat,
-                        enemies: newEnemies,
-                        log: [...prevState.combat.log, ...newLog],
-                        availableActions: data.availableActions || ['Attack', 'Defend', 'Use Skill'],
-                    },
+                    character: { ...prevState.character, hp: newPlayerHp },
+                    combat: { ...prevState.combat, enemies: newEnemies, log: [...prevState.combat.log, ...newLog], availableActions: data.availableActions || ['Attack', 'Defend', 'Use Skill'] },
                 };
             });
         }
-
     } catch (error) {
         console.error("Combat action failed:", error);
     } finally {
