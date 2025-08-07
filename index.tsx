@@ -40,6 +40,7 @@ interface Character {
     armor: Equipment | null;
     gear: Equipment[] | null;
   };
+  gold: number;
 }
 
 interface StorySegment {
@@ -81,10 +82,12 @@ interface GameState {
     setting: string;
   } | null;
   skillPools: SkillPools | null;
-  gameStatus: 'characterCreation' | 'characterCustomize' | 'levelUp' | 'playing' | 'loading' | 'initial_load' | 'combat' | 'gameOver';
+  gameStatus: 'characterCreation' | 'characterCustomize' | 'levelUp' | 'playing' | 'loading' | 'initial_load' | 'combat' | 'gameOver' | 'looting' | 'transaction';
   weather: string;
   timeOfDay: string;
   combat: CombatState | null;
+  loot: Loot | null;
+  transaction: TransactionState | null;
 }
 
 // Data stored before character is finalized
@@ -96,7 +99,8 @@ interface CreationData {
     initialStory: { text: string; actions: string[] };
     skillPools: SkillPools;
     startingSkillPoints: number;
-    startingEquipment: any; // Using `any` for simplicity here
+    startingEquipment: any;
+    background: string; 
 }
 
 // Data from initial creation form
@@ -115,8 +119,8 @@ interface Equipment {
   stats: {
     damage?: number;
     damageReduction?: number;
-    // You can add more stats here, like magical effects, etc.
   };
+  value: number; 
 }
 
 // --- COMBAT TYPES ---
@@ -139,6 +143,18 @@ interface CombatState {
     log: CombatLogEntry[];
     turn: 'player' | 'enemy';
     availableActions: string[];
+}
+
+interface Loot {
+    gold: number;
+    items: Equipment[];
+}
+
+interface TransactionState {
+    vendorName: string;
+    vendorDescription: string;
+    vendorPortrait: string | null;
+    inventory: Equipment[];
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -186,9 +202,9 @@ const characterGenSchema = {
           startingEquipment: {
               type: Type.OBJECT,
               properties: {
-                  weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
-                  armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
-                  gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } } }, required: ['name', 'description', 'stats'] } }
+                  weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] },
+                  armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] },
+                  gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] } }
               },
               required: ['weapon', 'armor', 'gear']
           }
@@ -226,9 +242,9 @@ const characterGenSchema = {
     startingEquipment: {
       type: Type.OBJECT,
       properties: {
-          weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
-          armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } } }, required: ['name', 'description', 'stats'] },
-          gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } } }, required: ['name', 'description', 'stats'] } }
+          weapon: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] },
+          armor: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] },
+          gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] } }
       },
       required: ['weapon', 'armor', 'gear']
     }
@@ -259,6 +275,32 @@ const nextStepSchema = {
                             hp: { type: Type.INTEGER }
                         },
                         required: ['name', 'description', 'hp']
+                    }
+                },
+                initiateTransaction: { 
+                    type: Type.BOOLEAN,
+                    description: "Set to true to start a transaction with an NPC."
+                },
+                transaction: {
+                    type: Type.OBJECT,
+                    description: "If initiateTransaction is true, provide vendor details.",
+                    nullable: true,
+                    properties: {
+                        vendorName: { type: Type.STRING },
+                        vendorDescription: { type: Type.STRING, description: "A description of the vendor suitable for a portrait."},
+                        inventory: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } },
+                                    value: { type: Type.INTEGER }
+                                },
+                                required: ['name', 'description', 'stats', 'value']
+                            }
+                        }
                     }
                 },
                 companionUpdates: {
@@ -369,7 +411,28 @@ const combatActionSchema = {
                 },
                 combatOver: { type: Type.BOOLEAN, description: "Set to true if all enemies have been defeated." },
                 victoryText: { type: Type.STRING, description: "If combat is over, a short text describing the victory. e.g., 'You stand victorious over the defeated goblins.'", nullable: true },
-                xpGained: { type: Type.INTEGER, description: "If combat is over, the amount of XP gained.", nullable: true }
+                xpGained: { type: Type.INTEGER, description: "If combat is over, the amount of XP gained.", nullable: true },
+                loot: {
+                    type: Type.OBJECT,
+                    description: "Gold and items dropped by the defeated enemies.",
+                    nullable: true,
+                    properties: {
+                        gold: { type: Type.INTEGER },
+                        items: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } },
+                                    value: { type: Type.INTEGER }
+                                },
+                                required: ['name', 'description', 'stats', 'value']
+                            }
+                        }
+                    }
+                }
             },
             required: ['log', 'playerHpChange', 'enemyHpChanges', 'availableActions', 'combatOver']
         }
@@ -658,6 +721,10 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                             <span className="stat-label">XP</span>
                             <span className="stat-value">{character.xp}</span>
                         </div>
+                        <div className="stat-item">
+                            <span className="stat-label">Gold</span>
+                            <span className="stat-value">{character.gold}</span>
+                        </div>
                     </div>
 
                     {character.skillPoints > 0 && (
@@ -666,13 +733,13 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {/* --- DEBUG BUTTON ---
+                    {/* --- DEBUG BUTTON --- */}
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
                             Sync HP to Level 16
                         </button>
                     )}
-                     --- END DEBUG BUTTON --- */}
+                    {/* --- END DEBUG BUTTON --- */}
 
 
                     <h3>Skills</h3>
@@ -790,13 +857,13 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
                     </div>
                     <span>HP: {character.hp} / {character.maxHp}</span>
                     
-                    {/* --- DEBUG BUTTON --- 
+                    {/* --- DEBUG BUTTON --- */}
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', marginTop: '1rem'}}>
                             Sync HP to Level 16
                         </button>
                     )}
-                     --- END DEBUG BUTTON --- */}
+                    {/* --- END DEBUG BUTTON --- */}
                 </div>
                 <div className="enemies-container">
                     {combat.enemies.map(enemy => (
@@ -829,6 +896,72 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
     );
 };
 
+const LootScreen = ({ loot, onContinue }: { loot: Loot, onContinue: () => void }) => {
+    return (
+        <div className="loot-container">
+            <h1>Victory!</h1>
+            <p className="loot-summary">You found {loot.gold} gold!</p>
+            {loot.items.length > 0 && (
+                <>
+                    <h3>Items Found:</h3>
+                    <ul className="loot-items">
+                        {loot.items.map(item => (
+                            <li key={item.name} className="loot-item">
+                                <strong>{item.name}</strong> - <em>{item.value} gold</em>
+                                <p>{item.description}</p>
+                            </li>
+                        ))}
+                    </ul>
+                </>
+            )}
+            <button onClick={onContinue}>Continue</button>
+        </div>
+    );
+};
+
+const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: GameState, onTransaction: (item: Equipment, action: 'buy' | 'sell') => void, onExit: () => void }) => {
+    if (!gameState.character || !gameState.transaction) {
+        return <Loader text="Loading transaction..." />;
+    }
+    const { character, transaction } = gameState;
+
+    return (
+        <div className="transaction-container">
+            <div className="transaction-vendor-panel">
+                <img src={transaction.vendorPortrait || ''} alt={transaction.vendorName} className="vendor-portrait" />
+                <div>
+                    <h1>{transaction.vendorName}</h1>
+                    <p>{transaction.vendorDescription}</p>
+                </div>
+            </div>
+            
+            <h2>Vendor's Wares</h2>
+            <ul className="transaction-items">
+                {transaction.inventory.map(item => (
+                    <li key={item.name} className="transaction-item">
+                        <strong>{item.name}</strong> - <em>{item.value} gold</em>
+                        <p>{item.description}</p>
+                        <button onClick={() => onTransaction(item, 'buy')} disabled={character.gold < item.value}>Buy</button>
+                    </li>
+                ))}
+            </ul>
+
+            <h2>Your Inventory</h2>
+            <ul className="transaction-items">
+                {character.equipment.gear?.map(item => (
+                     <li key={item.name} className="transaction-item">
+                        <strong>{item.name}</strong> - <em>{Math.floor(item.value / 2)} gold</em>
+                        <p>{item.description}</p>
+                        <button onClick={() => onTransaction(item, 'sell')}>Sell</button>
+                    </li>
+                ))}
+            </ul>
+
+            <button onClick={onExit} className="cancel-btn">Leave</button>
+        </div>
+    );
+};
+
 const GameOverScreen = ({ onNewGame }: { onNewGame: () => void }) => (
     <div className="game-over-container">
         <h1>Game Over</h1>
@@ -851,6 +984,8 @@ const App = () => {
     weather: 'Clear Skies',
     timeOfDay: 'Morning',
     combat: null,
+    loot: null,
+    transaction: null,
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
@@ -891,6 +1026,8 @@ const App = () => {
         timeOfDay: 'Morning',
         gameStatus: 'characterCreation',
         combat: null,
+        loot: null,
+        transaction: null,
       }));
   }, [setGameState, setCreationData]); // Add dependencies
 
@@ -1023,6 +1160,7 @@ const App = () => {
             skillPools: data.skillPools,
             startingSkillPoints: data.startingSkillPoints,
             startingEquipment: data.startingEquipment,
+            background: details.background,
         });
         setGameState(g => ({...g, companions: initialCompanions, gameStatus: 'characterCustomize'}));
 
@@ -1045,6 +1183,13 @@ const App = () => {
             generateImage(`${creationData.storyGuidance.setting}. ${creationData.initialStory.text}`)
         ]);
 
+        let startingGold = Math.floor(Math.random() * 100) + 1;
+        if (["Noble", "Royalty", "Merchant"].includes(creationData.background)) {
+            startingGold = Math.floor(Math.random() * 1000) + 1;
+        } else if (creationData.background === "Commoner") {
+            startingGold = Math.floor(Math.random() * 10) + 1;
+        }
+
         const newCharacter: Character = {
             name: creationData.name,
             gender: creationData.gender,
@@ -1056,7 +1201,8 @@ const App = () => {
             description: creationData.description,
             portrait: portrait,
             reputation: {},
-            equipment: creationData.startingEquipment
+            equipment: creationData.startingEquipment,
+            gold: startingGold,
         };
         const initialSegment: StorySegment = { text: creationData.initialStory.text, illustration };
 
@@ -1132,6 +1278,7 @@ const App = () => {
             Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
             Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
             If the action leads to a fight, set 'initiateCombat' to true and provide a list of enemies.
+            If the action leads to a transaction with a merchant, set 'initiateTransaction' to true and provide the vendor's details and inventory.
         `;
 
         const response = await ai.models.generateContent({
@@ -1145,13 +1292,7 @@ const App = () => {
         });
         
         const data = JSON.parse(response.text).story;
-        const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
-        const newSegment: StorySegment = {
-            text: data.text,
-            illustration: newIllustration,
-            skillCheck: data.skillCheck // <-- Save the skill check data
-        };
-
+        
         if (data.initiateCombat) {
             const enemyPortraits = await Promise.all(
                 data.enemies.map((enemy: any) => generateImage(enemy.description))
@@ -1179,8 +1320,23 @@ const App = () => {
                     availableActions: data.actions
                 }
             }));
-
+        } else if (data.initiateTransaction) {
+            const vendorPortrait = await generateImage(data.transaction.vendorDescription);
+            setGameState(prevState => ({
+                ...prevState,
+                gameStatus: 'transaction',
+                transaction: {
+                    ...data.transaction,
+                    vendorPortrait,
+                }
+            }));
         } else {
+            const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
+            const newSegment: StorySegment = {
+                text: data.text,
+                illustration: newIllustration,
+                skillCheck: data.skillCheck // <-- Save the skill check data
+            };
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
                 const oldXp = prevState.character.xp;
@@ -1200,7 +1356,8 @@ const App = () => {
                         const newEquipmentItem: Equipment = {
                             name: update.name,
                             description: update.description,
-                            stats: update.stats
+                            stats: update.stats,
+                            value: update.value,
                         };
                         if (update.slot === 'weapon') {
                             updatedEquipment.weapon = newEquipmentItem;
@@ -1267,7 +1424,7 @@ const App = () => {
         const newStoryLogLength = gameState.storyLog.length + 1;
         if (newStoryLogLength > 0 && newStoryLogLength % 10 === 0) {
             const oldSummary = gameState.character?.storySummary || "The story has just begun.";
-            const recentEvents = [...gameState.storyLog, newSegment].slice(-10).map(s => s.text).join('\n\n');
+            const recentEvents = [...gameState.storyLog].slice(-10).map(s => s.text).join('\n\n');
 
             const summaryPrompt = `
                 You are a master storyteller. Update the character's story summary based on the previous summary and recent events.
@@ -1345,7 +1502,7 @@ const App = () => {
         - Describe what happens in the combat log. Be descriptive.
         - Calculate HP changes for the player and enemies. For each enemy that takes damage, you MUST return an object in the 'enemyHpChanges' array with the correct 'id' and the negative hpChange value.
         - Provide a new list of 3-4 available actions for the player's next turn.
-        - If all enemies are defeated, set combatOver to true, provide victory text and XP gained.
+        - If all enemies are defeated, set combatOver to true, provide victory text, XP gained, and any loot (gold and items).
     `;
 
     try {
@@ -1362,7 +1519,6 @@ const App = () => {
         const data = JSON.parse(response.text).combatResult;
 
         if (data.combatOver) {
-            const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`);
             setGameState(prevState => {
                 if (!prevState.character || !prevState.combat) return prevState;
                 const newPlayerHp = prevState.character.hp + data.playerHpChange;
@@ -1372,6 +1528,8 @@ const App = () => {
                 const newXp = prevState.character.xp + (data.xpGained || 0);
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
 
+                const newLoot = data.loot || { gold: 0, items: [] };
+
                 return {
                     ...prevState,
                     character: {
@@ -1379,11 +1537,15 @@ const App = () => {
                         hp: newPlayerHp,
                         xp: newXp,
                         skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                        gold: prevState.character.gold + newLoot.gold,
+                        equipment: {
+                            ...prevState.character.equipment,
+                            gear: [...(prevState.character.equipment.gear || []), ...newLoot.items],
+                        },
                     },
-                    gameStatus: 'playing',
+                    gameStatus: 'looting',
                     combat: null,
-                    storyLog: [...prevState.storyLog, { text: data.victoryText, illustration: victoryIllustration }],
-                    currentActions: ['Continue exploring.'],
+                    loot: newLoot,
                 };
             });
 
@@ -1427,6 +1589,51 @@ const App = () => {
         setApiIsLoading(false);
     }
 }, [gameState, generateImage]);
+
+  const handleLootContinue = () => {
+    setGameState(prevState => ({
+        ...prevState,
+        gameStatus: 'playing',
+        loot: null,
+    }));
+  };
+
+  const handleTransaction = (item: Equipment, action: 'buy' | 'sell') => {
+    setGameState(prevState => {
+        if (!prevState.character) return prevState;
+
+        let newGold = prevState.character.gold;
+        let newGear = [...(prevState.character.equipment.gear || [])];
+
+        if (action === 'buy') {
+            newGold -= item.value;
+            newGear.push(item);
+        } else {
+            newGold += Math.floor(item.value / 2);
+            newGear = newGear.filter(i => i.name !== item.name);
+        }
+
+        return {
+            ...prevState,
+            character: {
+                ...prevState.character,
+                gold: newGold,
+                equipment: {
+                    ...prevState.character.equipment,
+                    gear: newGear,
+                },
+            },
+        };
+    });
+  };
+
+  const handleTransactionExit = () => {
+    setGameState(prevState => ({
+        ...prevState,
+        gameStatus: 'playing',
+        transaction: null,
+    }));
+  };
 
   const handleCustomActionSubmit = (action: string) => {
       setIsCustomActionModalOpen(false);
@@ -1518,6 +1725,11 @@ const App = () => {
                 />
       case 'combat':
           return <CombatScreen gameState={gameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} onSyncHp={handleSyncHp} />;
+      case 'looting':
+          if (!gameState.loot) return <Loader text="Loading loot..." />;
+          return <LootScreen loot={gameState.loot} onContinue={handleLootContinue} />;
+      case 'transaction':
+          return <TransactionScreen gameState={gameState} onTransaction={handleTransaction} onExit={handleTransactionExit} />;
       case 'gameOver':
           return <GameOverScreen onNewGame={handleNewGame} />;
       case 'loading':

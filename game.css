@@ -778,7 +778,7 @@ select:focus, .creation-form select:focus {
 .combat-log-entry {
     padding: 0.75rem;
     border-bottom: 1px solid var(--color-border);
-    font-size: 1.5rem;
+    font-size: 1.1rem;
     line-height: 1.6;
     opacity: 0;
     animation: fadeInEntry 0.5s ease forwards;
@@ -824,4 +824,62 @@ select:focus, .creation-form select:focus {
 .game-over-container p {
     font-size: 1.5rem;
     margin-bottom: 2rem;
+}
+
+/* --- LOOT & TRANSACTION --- */
+.loot-container, .transaction-container {
+    width: 100%;
+    max-width: 900px;
+    margin: auto;
+    padding: 2rem;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-strong);
+    text-align: center;
+}
+
+.loot-container h1, .transaction-container h1 {
+    font-size: 3rem;
+}
+
+.loot-summary {
+    font-size: 1.5rem;
+    color: var(--color-primary);
+    margin: 1rem 0 2rem 0;
+}
+
+.loot-items, .transaction-items {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 2rem 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+}
+
+.loot-item, .transaction-item {
+    background: var(--color-background);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--color-border);
+}
+
+.transaction-vendor-panel {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    text-align: left;
+    margin-bottom: 2rem;
+    background: var(--color-background);
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+}
+
+.vendor-portrait {
+    width: 150px;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 4px solid var(--color-primary-dark);
 }
