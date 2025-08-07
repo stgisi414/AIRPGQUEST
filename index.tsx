@@ -855,14 +855,19 @@ const App = () => {
           if (savedStateJSON) {
             const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
 
-            if (savedGameState.character && savedGameState.gameStatus === 'playing' && !savedGameState.character.portrait) {
-              const [portrait, illustration] = await Promise.all([
-                generateImage(savedGameState.character.description),
-                generateImage(`${savedGameState.storyGuidance.setting}. ${savedGameState.storyLog[savedGameState.storyLog.length - 1].text}`)
-              ]);
-              savedGameState.character.portrait = portrait;
-              savedGameState.storyLog[savedGameState.storyLog.length - 1].illustration = illustration;
+            // Regenerate character portrait on load if it's missing
+            if (savedGameState.character && !savedGameState.character.portrait) {
+              savedGameState.character.portrait = await generateImage(savedGameState.character.description);
             }
+
+            // Regenerate the last story illustration if it's missing
+            if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
+                const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
+                if (!lastSegment.illustration) {
+                    lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
+                }
+            }
+
 
             // IMPORTANT: Merge with defaults to prevent errors from old saves
             setGameState(prevState => ({
@@ -887,7 +892,7 @@ const App = () => {
 
       loadGame();
       // This useEffect should ONLY run once on startup.
-  }, [generateImage]);
+  }, [generateImage, handleNewGame]);
 
   // Save to localStorage on change
   useEffect(() => {
@@ -1303,24 +1308,14 @@ const App = () => {
 
         const data = JSON.parse(response.text).combatResult;
 
-        setGameState(prevState => {
-            if (!prevState.character || !prevState.combat) return prevState;
-
-            const newLog: CombatLogEntry[] = data.log.map((message: string) => ({ type: 'info', message }));
-            const newEnemies = [...prevState.combat.enemies];
-            data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
-                const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
-                if (enemyIndex !== -1) {
-                    newEnemies[enemyIndex].hp += change.hpChange;
+        if (data.combatOver) {
+            const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`);
+            setGameState(prevState => {
+                if (!prevState.character || !prevState.combat) return prevState;
+                const newPlayerHp = prevState.character.hp + data.playerHpChange;
+                 if (newPlayerHp <= 0) {
+                    return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
                 }
-            });
-
-            const newPlayerHp = prevState.character.hp + data.playerHpChange;
-            if (newPlayerHp <= 0) {
-                return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
-            }
-
-            if (data.combatOver) {
                 const newXp = prevState.character.xp + (data.xpGained || 0);
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
 
@@ -1334,32 +1329,51 @@ const App = () => {
                     },
                     gameStatus: 'playing',
                     combat: null,
-                    storyLog: [...prevState.storyLog, { text: data.victoryText, illustration: '' }],
+                    storyLog: [...prevState.storyLog, { text: data.victoryText, illustration: victoryIllustration }],
                     currentActions: ['Continue exploring.'],
                 };
-            }
+            });
 
-            return {
-                ...prevState,
-                character: {
-                    ...prevState.character,
-                    hp: newPlayerHp,
-                },
-                combat: {
-                    ...prevState.combat,
-                    enemies: newEnemies,
-                    log: [...prevState.combat.log, ...newLog],
-                    availableActions: data.availableActions,
-                },
-            };
-        });
+        } else {
+             setGameState(prevState => {
+                if (!prevState.character || !prevState.combat) return prevState;
+
+                const newLog: CombatLogEntry[] = data.log.map((message: string) => ({ type: 'info', message }));
+                const newEnemies = [...prevState.combat.enemies];
+                data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
+                    const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
+                    if (enemyIndex !== -1) {
+                        newEnemies[enemyIndex].hp += change.hpChange;
+                    }
+                });
+
+                const newPlayerHp = prevState.character.hp + data.playerHpChange;
+                if (newPlayerHp <= 0) {
+                    return { ...prevState, character: { ...prevState.character, hp: 0 }, gameStatus: 'gameOver' };
+                }
+
+                return {
+                    ...prevState,
+                    character: {
+                        ...prevState.character,
+                        hp: newPlayerHp,
+                    },
+                    combat: {
+                        ...prevState.combat,
+                        enemies: newEnemies,
+                        log: [...prevState.combat.log, ...newLog],
+                        availableActions: data.availableActions,
+                    },
+                };
+            });
+        }
 
     } catch (error) {
         console.error("Combat action failed:", error);
     } finally {
         setApiIsLoading(false);
     }
-}, [gameState]);
+}, [gameState, generateImage]);
 
   const handleCustomActionSubmit = (action: string) => {
       setIsCustomActionModalOpen(false);
