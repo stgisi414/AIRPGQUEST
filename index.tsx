@@ -44,7 +44,12 @@ interface Character {
 
 interface StorySegment {
   text: string;
-  illustration: string; // base64 image
+  illustration: string | null; // base64 image
+  skillCheck?: {
+    skillName: string;
+    success: boolean;
+    difficulty: string;
+  };
 }
 
 type SkillPools = { [key: string]: string[] };
@@ -276,7 +281,6 @@ const nextStepSchema = {
                         name: { type: Type.STRING },
                         description: { type: Type.STRING },
                         personality: { type: Type.STRING },
-                        // REPLACE the old 'skills' definition with this one:
                         skills: {
                             type: Type.ARRAY,
                             description: "An array of objects, where each object represents a skill and its level.",
@@ -315,6 +319,17 @@ const nextStepSchema = {
                         },
                         required: ['slot', 'name', 'description', 'stats', 'action']
                     }
+                },
+                skillCheck: {
+                    type: Type.OBJECT,
+                    description: "Details of a skill check performed. Only include if a skill check was triggered by the player's action.",
+                    nullable: true,
+                    properties: {
+                        skillName: { type: Type.STRING, description: "The name of the skill being tested (e.g., 'Swordsmanship')." },
+                        success: { type: Type.BOOLEAN, description: "True if the skill check was successful, false otherwise." },
+                        difficulty: { type: Type.STRING, description: "A brief description of the difficulty (e.g., 'Moderate', 'Challenging')." },
+                    },
+                    required: ['skillName', 'success', 'difficulty']
                 }
             },
             required: ['text', 'actions', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
@@ -573,7 +588,7 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void}) => {
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
@@ -632,7 +647,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
             </header>
             <main className="game-main">
                 <div className="character-panel">
-                    <img src={character.portrait} alt={`${character.name}'s portrait`} className="character-portrait" />
+                    <img src={character.portrait || ''} alt={`${character.name}'s portrait`} className="character-portrait" />
                     <h2>{character.name}</h2>
                     <div className="stats-grid">
                         <div className="stat-item">
@@ -651,11 +666,14 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {/* {character.name === "Cinderblaze" && (
+                    {/* --- DEBUG BUTTON ---
+                    {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
                             Sync HP to Level 16
                         </button>
-                    )} */}
+                    )}
+                     --- END DEBUG BUTTON --- */}
+
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
@@ -708,7 +726,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                 <div className="story-panel">
                     <div className="illustration-container">
                        {isLoading && <div className="illustration-loader"><Loader text="Drawing next scene..."/></div>}
-                       <img src={currentScene.illustration} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
+                       <img src={currentScene.illustration || ''} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
                     </div>
                     <div className="story-text">
                         <button
@@ -718,6 +736,21 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         >
                             {isSpeaking ? '⏹️' : '▶️'}
                         </button>
+                        {/* Display skill check result here */}
+                        {currentScene.skillCheck && (
+                            <p style={{
+                                fontStyle: 'italic',
+                                color: currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c',
+                                textAlign: 'center',
+                                border: `1px solid ${currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c'}`,
+                                padding: '0.5rem',
+                                borderRadius: 'var(--border-radius)',
+                                marginBottom: '1rem',
+                                backgroundColor: 'rgba(0,0,0,0.2)'
+                            }}>
+                                Your <b>{currentScene.skillCheck.skillName}</b> check ({currentScene.skillCheck.difficulty}) was a <b style={{textTransform: 'uppercase'}}>{currentScene.skillCheck.success ? 'success' : 'failure'}</b>!
+                            </p>
+                        )}
                         <p>{currentScene.text}</p>
                     </div>
                     <div className="actions-panel">
@@ -1057,7 +1090,6 @@ const App = () => {
             `  - Name: ${c.name}, Personality: ${c.personality}, Relationship: ${c.relationship}`
         ).join('\n');
 
-        // Update the prompt to tell the AI about the new equipmentUpdates field
         const prompt = `
             Continue this text adventure.
             STORY GUIDANCE:
@@ -1095,7 +1127,9 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
-            Update companion relationships if their opinion of the player changes. If the player recruits a previously mentioned character (like Elara), you MUST populate the 'newCompanion' field with their full details.
+            If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check against a difficulty. The player's skill level should influence the success. Populate the 'skillCheck' field with the results. The 'text' field should narrate the outcome of the skill check.
+
+            Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
             Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
             If the action leads to a fight, set 'initiateCombat' to true and provide a list of enemies.
         `;
@@ -1109,8 +1143,14 @@ const App = () => {
                 safetySettings: safetySettings,
             },
         });
-
+        
         const data = JSON.parse(response.text).story;
+        const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
+        const newSegment: StorySegment = {
+            text: data.text,
+            illustration: newIllustration,
+            skillCheck: data.skillCheck // <-- Save the skill check data
+        };
 
         if (data.initiateCombat) {
             const enemyPortraits = await Promise.all(
@@ -1141,9 +1181,6 @@ const App = () => {
             }));
 
         } else {
-            const newIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.text}`);
-            const newSegment: StorySegment = { text: data.text, illustration: newIllustration };
-
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
                 const oldXp = prevState.character.xp;
@@ -1155,7 +1192,7 @@ const App = () => {
                         newReputation[faction] = (newReputation[faction] || 0) + change;
                     }
                 }
-
+                
                 // Handle equipment updates
                 const updatedEquipment = { ...prevState.character.equipment };
                 if (data.equipmentUpdates) {
@@ -1177,7 +1214,7 @@ const App = () => {
                         }
                     }
                 }
-
+                
                 const updatedCharacter = {
                     ...prevState.character,
                     hp: prevState.character.hp + data.didHpChange,
@@ -1198,8 +1235,7 @@ const App = () => {
                 }
 
                 // Handle adding a new companion
-                // Check if the new companion is a character that is not already in the party.
-                if (data.newCompanion && !updatedCompanions.find(c => c.name === data.newCompanion.name)) {
+                if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                      if (updatedCompanions.length < 5) {
                         const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                             acc[skill.skillName] = skill.level;
@@ -1281,7 +1317,7 @@ const App = () => {
     } finally {
         setApiIsLoading(false);
     }
-  }, [gameState, generateImage]);
+}, [gameState, generateImage]);
 
   const handleCombatAction = useCallback(async (action: string) => {
     if (!gameState.character || !gameState.combat) return;
