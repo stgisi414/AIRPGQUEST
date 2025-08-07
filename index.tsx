@@ -855,9 +855,15 @@ const App = () => {
           if (savedStateJSON) {
             const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
 
-            // Regenerate character portrait on load if it's missing
-            if (savedGameState.character && !savedGameState.character.portrait) {
-              savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+            if (savedGameState.character) {
+                // Regenerate character portrait on load if it's missing
+                if (!savedGameState.character.portrait) {
+                    savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+                }
+                // *** FIX: Add maxHp if it's missing from an old save ***
+                if (!savedGameState.character.maxHp) {
+                    savedGameState.character.maxHp = 100; 
+                }
             }
 
             // Regenerate the last story illustration if it's missing
@@ -867,7 +873,6 @@ const App = () => {
                     lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
                 }
             }
-
 
             // IMPORTANT: Merge with defaults to prevent errors from old saves
             setGameState(prevState => ({
