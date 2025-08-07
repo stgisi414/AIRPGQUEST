@@ -1391,12 +1391,20 @@ const App = () => {
 
         const pointsSpent = Object.values(updatedSkills).reduce((sum, level) => sum + level, 0) - Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
 
+        // Calculate HP gain: 3d6 + current level
+        const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
+        const hpGain = diceRolls.reduce((a, b) => a + b, 0) + Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
+        
+        const newMaxHp = g.character.maxHp + hpGain;
+
         return {
             ...g,
             character: {
                 ...g.character,
                 skills: updatedSkills,
                 skillPoints: g.character.skillPoints - pointsSpent,
+                maxHp: newMaxHp,
+                hp: newMaxHp, // Heal to full on level up
             },
             gameStatus: 'playing'
         }
