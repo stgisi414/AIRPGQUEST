@@ -778,7 +778,7 @@ select:focus, .creation-form select:focus {
 .combat-log-entry {
     padding: 0.75rem;
     border-bottom: 1px solid var(--color-border);
-    font-size: 1.1rem;
+    font-size: 1.5rem;
     line-height: 1.6;
     opacity: 0;
     animation: fadeInEntry 0.5s ease forwards;
