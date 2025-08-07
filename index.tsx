@@ -1575,10 +1575,12 @@ const App = () => {
         const data = JSON.parse(response.text).combatResult;
 
         if (data.combatOver) {
+            const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`);
             const victorySegment: StorySegment = {
                 text: data.victoryText || "You are victorious!",
-                illustration: await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`),
+                illustration: victoryIllustration,
             };
+
             setGameState(prevState => {
                 if (!prevState.character || !prevState.combat) return prevState;
                 const newPlayerHp = prevState.character.hp + data.playerHpChange;
@@ -1606,7 +1608,7 @@ const App = () => {
                     gameStatus: 'looting',
                     combat: null,
                     loot: newLoot,
-                    storyLog: [...prevState.storyLog, victorySegment] // MODIFY THIS LINE
+                    storyLog: [...prevState.storyLog, victorySegment]
                 };
             });
 
