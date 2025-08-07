@@ -223,6 +223,10 @@ select:focus, .creation-form select:focus {
     align-items: center;
 }
 
+.stat-item.full-width {
+    grid-column: 1 / -1; /* This makes the item span all columns */
+}
+
 .stat-label {
     font-family: var(--font-display);
     font-size: 1rem;

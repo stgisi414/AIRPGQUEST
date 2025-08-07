@@ -721,7 +721,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                             <span className="stat-label">XP</span>
                             <span className="stat-value">{character.xp}</span>
                         </div>
-                        <div className="stat-item">
+                        <div className="stat-item full-width">
                             <span className="stat-label">Gold</span>
                             <span className="stat-value">{character.gold}</span>
                         </div>
@@ -765,8 +765,8 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                           <li>
                             🛡️Armor: {character.equipment.armor?.name} <span className="skill-level">DR: {character.equipment.armor?.stats.damageReduction}</span>
                           </li>
-                          {character.equipment.gear && character.equipment.gear.map(gear => (
-                            <li key={gear.name}>
+                          {character.equipment.gear && character.equipment.gear.map((gear, index) => (
+                            <li key={`${gear.name}-${index}`}>
                               {gear.name}
                               <span className="skill-level">
                                 {gear.stats.damage ? `DMG: ${gear.stats.damage}` : ''}
