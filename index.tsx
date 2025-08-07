@@ -1543,7 +1543,7 @@ const App = () => {
         CHARACTER:
         Name: ${gameState.character.name}
         HP: ${gameState.character.hp}
-        Skills: ${Object.keys(gameState.character.skills).join(', ')}
+        Skills: ${Object.entries(gameState.character.skills).map(([skill, level]) => `${skill} (Lvl ${level})`).join(', ')}
         Equipment:
         - Weapon: ${gameState.character.equipment.weapon?.name} (Damage: ${gameState.character.equipment.weapon?.stats.damage})
         - Armor: ${gameState.character.equipment.armor?.name} (Damage Reduction: ${gameState.character.equipment.armor?.stats.damageReduction})
@@ -1553,9 +1553,18 @@ const App = () => {
 
         TASK:
         Process the player's action and the enemies' turn. Return the result of the turn.
-        - Base the damage dealt by the player on their weapon's damage stat.
+        - When the player attacks, determine the most relevant combat skill from their skill list (e.g., 'Swords', 'Archery', 'Fire Magic').
+        - Calculate a damage multiplier based on the level of that skill. The formula for the multiplier is as follows:
+          - Level 1: 1x
+          - Level 2: 1.2x
+          - Level 3: 1.4x
+          - Level 4: 1.8x
+          - Level 5: 2.6x
+          - Level 6: 4.2x
+          - For levels above 6, the difference from the previous multiplier doubles each time. (e.g., Level 7 is 4.2 + (1.6 * 2) = 7.4x)
+        - The final damage should be the weapon's damage stat multiplied by this skill level multiplier, then rounded to the nearest whole number.
         - When enemies attack the player, reduce the damage taken by the player's armor's damage reduction stat.
-        - Describe what happens in the combat log. Be descriptive.
+        - Describe what happens in the combat log. Be descriptive and reflect the power of high-level attacks. For example, a high-level sword strike shouldn't just "hit", it should "cleave through the goblin's defenses with a flash of steel."
         - Calculate HP changes for the player and enemies. For each enemy that takes damage, you MUST return an object in the 'enemyHpChanges' array with the correct 'id' and the negative hpChange value.
         - Provide a new list of 3-4 available actions for the player's next turn.
         - If all enemies are defeated, set combatOver to true, provide victory text, XP gained, and any loot (gold and items).
@@ -1640,7 +1649,6 @@ const App = () => {
                         ...prevState.combat,
                         enemies: newEnemies,
                         log: [...prevState.combat.log, ...newLog],
-                        // MODIFY THIS LINE:
                         availableActions: data.availableActions || ['Attack', 'Defend', 'Use Skill'],
                     },
                 };
@@ -1789,6 +1797,30 @@ const App = () => {
         };
     });
   };
+
+  useEffect(() => {
+    const handleForceActions = () => {
+      console.log("Force combat actions command received.");
+      setGameState(prevState => {
+        if (prevState.gameStatus === 'combat' && prevState.combat) {
+          return {
+            ...prevState,
+            combat: {
+              ...prevState.combat,
+              availableActions: ['Attack', 'Defend', 'Use Skill'],
+            },
+          };
+        }
+        return prevState;
+      });
+    };
+
+    window.addEventListener('force-combat-actions', handleForceActions);
+
+    return () => {
+      window.removeEventListener('force-combat-actions', handleForceActions);
+    };
+  }, []); // The empty dependency array means this runs only once
 
   const renderContent = () => {
     switch (gameState.gameStatus) {
