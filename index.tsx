@@ -651,6 +651,12 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
+                    {character.name === "Cinderblaze" && (
+                        <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
+                            Sync HP to Level 16
+                        </button>
+                    )}
+
                     <h3>Skills</h3>
                     <ul className="skills-list">
                         {Object.entries(character.skills).sort(([, lvlA], [, lvlB]) => lvlB - lvlA).map(([skill, level]) => (
@@ -1411,6 +1417,29 @@ const App = () => {
       });
   };
 
+  const handleSyncHp = () => {
+        setGameState(g => {
+            if (!g.character || g.character.name !== "Cinderblaze") return g;
+    
+            let totalHp = 100;
+            // Start from level 2 up to 16
+            for (let level = 2; level <= 16; level++) {
+                const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
+                const hpGain = diceRolls.reduce((a, b) => a + b, 0) + level;
+                totalHp += hpGain;
+            }
+    
+            return {
+                ...g,
+                character: {
+                    ...g.character,
+                    maxHp: totalHp,
+                    hp: totalHp,
+                }
+            };
+        });
+    };
+
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'playing':
@@ -1421,6 +1450,7 @@ const App = () => {
                     onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
                     isLoading={apiIsLoading}
                     onCustomActionClick={() => setIsCustomActionModalOpen(true)}
+                    onSyncHp={handleSyncHp} 
                 />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;
