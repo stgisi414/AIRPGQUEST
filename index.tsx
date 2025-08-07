@@ -651,7 +651,7 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void }) => {
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
@@ -733,13 +733,19 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {/* --- DEBUG BUTTON --- */}
+                    {/* --- DEBUG BUTTON --- 
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
                             Sync HP to Level 16
                         </button>
                     )}
-                    {/* --- END DEBUG BUTTON --- */}
+                     --- END DEBUG BUTTON --- */}
+
+                    {character.name === "Cinderblaze" && (
+                        <button onClick={onSyncGoldAndLoot} className="level-up-btn" style={{backgroundColor: '#f39c12', marginTop: '0.5rem'}}>
+                            Sync Gold & Loot
+                        </button>
+                    )}
 
 
                     <h3>Skills</h3>
@@ -857,13 +863,13 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
                     </div>
                     <span>HP: {character.hp} / {character.maxHp}</span>
                     
-                    {/* --- DEBUG BUTTON --- */}
+                    {/* --- DEBUG BUTTON --- 
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', marginTop: '1rem'}}>
                             Sync HP to Level 16
                         </button>
                     )}
-                    {/* --- END DEBUG BUTTON --- */}
+                     --- END DEBUG BUTTON --- */}
                 </div>
                 <div className="enemies-container">
                     {combat.enemies.map(enemy => (
@@ -1224,7 +1230,6 @@ const App = () => {
          setApiIsLoading(false);
      }
   }, [creationData, generateImage, handleNewGame]);
-
 
   const handleAction = useCallback(async (action: string) => {
     if (!gameState.character || !gameState.storyGuidance) return;
@@ -1689,6 +1694,41 @@ const App = () => {
         });
     };
 
+  const handleSyncGoldAndLoot = () => {
+    setGameState(g => {
+        if (!g.character || g.character.name !== "Cinderblaze") return g;
+
+        const syncGold = Math.floor(Math.random() * 10000) + 1;
+
+        const syncedItems: Equipment[] = [
+            {
+                name: "Amulet of the Ages",
+                description: "A powerful amulet that hums with ancient energy.",
+                stats: { damageReduction: 5 },
+                value: 5000
+            },
+            {
+                name: "Ring of the Phoenix",
+                description: "A ring that seems to burn with an inner fire.",
+                stats: { damage: 5 },
+                value: 5000
+            }
+        ];
+
+        return {
+            ...g,
+            character: {
+                ...g.character,
+                gold: g.character.gold + syncGold,
+                equipment: {
+                    ...g.character.equipment,
+                    gear: [...(g.character.equipment.gear || []), ...syncedItems],
+                },
+            }
+        };
+    });
+  };
+
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'playing':
@@ -1699,7 +1739,9 @@ const App = () => {
                     onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
                     isLoading={apiIsLoading}
                     onCustomActionClick={() => setIsCustomActionModalOpen(true)}
-                    onSyncHp={handleSyncHp} 
+                    onSyncHp={handleSyncHp}
+                    onSyncGoldAndLoot={handleSyncGoldAndLoot}
+
                 />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;

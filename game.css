@@ -220,6 +220,7 @@ select:focus, .creation-form select:focus {
 .stat-item {
     display: flex;
     flex-direction: column;
+    align-items: center;
 }
 
 .stat-label {
