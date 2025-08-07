@@ -32,7 +32,7 @@ interface Character {
   skills: { [key: string]: number };
   skillPoints: number;
   description: string;
-  portrait: string; // base64 image
+  portrait: string | null; // base64 image
   storySummary?: string;
   reputation: { [key: string]: number };
   equipment: {
@@ -121,7 +121,7 @@ interface Enemy {
     hp: number;
     maxHp: number;
     description: string;
-    portrait: string; // base64 image
+    portrait: string | null; // base64 image
 }
 
 interface CombatLogEntry {
@@ -736,7 +736,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
     );
 }
 
-const CombatScreen = ({ gameState, onCombatAction, isLoading }: { gameState: GameState, onCombatAction: (action: string) => void, isLoading: boolean }) => {
+const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { gameState: GameState, onCombatAction: (action: string) => void, isLoading: boolean, onSyncHp: () => void }) => {
     if (!gameState.character || !gameState.combat) {
         return <Loader text="Loading combat..." />;
     }
@@ -750,17 +750,25 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading }: { gameState: Gam
             </header>
             <div className="combat-participants-container">
                 <div className="player-card">
-                    <img src={character.portrait} alt={character.name} className="character-portrait-combat" />
+                    <img src={character.portrait || ''} alt={character.name} className="character-portrait-combat" />
                     <h3>{character.name}</h3>
                     <div className="player-hp-bar-container">
                         <div className="player-hp-bar" style={{ width: `${(character.hp / character.maxHp) * 100}%` }}></div>
                     </div>
                     <span>HP: {character.hp} / {character.maxHp}</span>
+                    
+                    {/* --- DEBUG BUTTON --- */}
+                    {character.name === "Cinderblaze" && (
+                        <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', marginTop: '1rem'}}>
+                            Sync HP to Level 16
+                        </button>
+                    )}
+                    {/* --- END DEBUG BUTTON --- */}
                 </div>
                 <div className="enemies-container">
                     {combat.enemies.map(enemy => (
                         <div key={enemy.id} className={`enemy-card ${enemy.hp <= 0 ? 'defeated' : ''}`}>
-                            <img src={enemy.portrait} alt={enemy.name} className="enemy-portrait" />
+                            <img src={enemy.portrait || ''} alt={enemy.name} className="enemy-portrait" />
                             <h3>{enemy.name}</h3>
                             <div className="enemy-hp-bar-container">
                                 <div className="enemy-hp-bar" style={{ width: `${(enemy.hp / enemy.maxHp) * 100}%` }}></div>
@@ -815,7 +823,7 @@ const App = () => {
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
 
-  const generateImage = useCallback(async (prompt: string): Promise<string> => {
+  const generateImage = useCallback(async (prompt: string): Promise<string | null> => {
     try {
         const response = await ai.models.generateImages({
             model: 'imagen-3.0-generate-002',
@@ -831,7 +839,7 @@ const App = () => {
         return `data:image/jpeg;base64,${base64ImageBytes}`;
     } catch (error) {
         console.error("Image generation failed:", error);
-        return "";
+        return null;
     }
   }, []);
 
@@ -910,16 +918,14 @@ const App = () => {
     if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
       const stateToSave = {
         ...gameState,
-        // Still remove the portrait to save space; it will be regenerated on load.
         character: gameState.character
-          ? { ...gameState.character, portrait: '' }
+          ? { ...gameState.character, portrait: null }
           : null,
-        // For the story log, only keep the illustration for the very last entry.
         storyLog: gameState.storyLog.map((segment, index) => {
           if (index === gameState.storyLog.length - 1) {
-            return segment; // This is the last segment, keep the illustration.
+            return segment;
           }
-          return { ...segment, illustration: '' }; // For all others, clear it.
+          return { ...segment, illustration: null };
         }),
       };
       localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
@@ -1475,7 +1481,7 @@ const App = () => {
                     completeButtonText="Confirm Skills"
                 />
       case 'combat':
-          return <CombatScreen gameState={gameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} />;
+          return <CombatScreen gameState={gameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} onSyncHp={handleSyncHp} />;
       case 'gameOver':
           return <GameOverScreen onNewGame={handleNewGame} />;
       case 'loading':
