@@ -844,11 +844,42 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
 }
 
 const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { gameState: GameState, onCombatAction: (action: string) => void, isLoading: boolean, onSyncHp: () => void }) => {
+    const [isSpeaking, setIsSpeaking] = useState(false);
+
     if (!gameState.character || !gameState.combat) {
         return <Loader text="Loading combat..." />;
     }
 
     const { character, combat } = gameState;
+
+    useEffect(() => {
+        speechSynthesis.onvoiceschanged = () => {};
+        return () => {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.cancel();
+                setIsSpeaking(false);
+            }
+        };
+    }, []);
+
+    const handlePlayAudio = (text: string, gender: string) => {
+        if (speechSynthesis.speaking) {
+            speechSynthesis.cancel();
+            setIsSpeaking(false);
+            return;
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = speechSynthesis.getVoices();
+        let selectedVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes(gender)) || voices.find(v => v.lang.startsWith('en'));
+
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+        speechSynthesis.speak(utterance);
+    };
 
     return (
         <div className="combat-container">
@@ -888,6 +919,17 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
             <div className="combat-log-container">
                 {combat.log.map((entry, index) => (
                     <div key={index} className={`combat-log-entry ${entry.type}`}>
+                        {/* Add this condition to render the button for the first 'info' entry */}
+                        {index === 0 && entry.type === 'info' && (
+                            <button
+                                className="play-audio-btn"
+                                onClick={() => handlePlayAudio(entry.message, character.gender)}
+                                aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
+                                style={{ float: 'right', marginLeft: '1rem' }} // Basic positioning
+                            >
+                                {isSpeaking ? '⏹️' : '▶️'}
+                            </button>
+                        )}
                         {entry.message}
                     </div>
                 )).reverse()}
@@ -1298,7 +1340,6 @@ const App = () => {
         });
 
         const data = JSON.parse(response.text).story;
-
         if (data.initiateCombat && data.enemies && data.enemies.length > 0) {
             const enemyPortraits = await Promise.all(
                 data.enemies.map((enemy: any) => generateImage(enemy.description))
@@ -1316,17 +1357,25 @@ const App = () => {
                 message: data.text
             }];
 
-            setGameState(prevState => ({
-                ...prevState,
-                gameStatus: 'combat',
-                combat: {
-                    enemies,
-                    log: combatLog,
-                    turn: 'player',
-                    availableActions: data.actions
-                },
-                 storyLog: [...prevState.storyLog, { text: data.text, illustration: null }], // Add initial combat text to log
-            }));
+            setGameState(prevState => {
+                if (!prevState.character) return prevState;
+                // Also add the initial combat text to the main story log
+                const combatIntroSegment: StorySegment = {
+                    text: data.text,
+                    illustration: null, // No illustration for the combat intro text
+                };
+                return {
+                    ...prevState,
+                    gameStatus: 'combat',
+                    combat: {
+                        enemies,
+                        log: combatLog,
+                        turn: 'player',
+                        availableActions: data.actions
+                    },
+                    storyLog: [...prevState.storyLog, combatIntroSegment],
+                }
+            });
         } else if (data.initiateTransaction) {
             const vendorPortrait = await generateImage(data.transaction.vendorDescription);
             setGameState(prevState => ({
@@ -1526,7 +1575,7 @@ const App = () => {
         const data = JSON.parse(response.text).combatResult;
 
         if (data.combatOver) {
-             const victorySegment: StorySegment = {
+            const victorySegment: StorySegment = {
                 text: data.victoryText || "You are victorious!",
                 illustration: await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`),
             };
@@ -1557,7 +1606,7 @@ const App = () => {
                     gameStatus: 'looting',
                     combat: null,
                     loot: newLoot,
-                    storyLog: [...prevState.storyLog, victorySegment]
+                    storyLog: [...prevState.storyLog, victorySegment] // MODIFY THIS LINE
                 };
             });
 
