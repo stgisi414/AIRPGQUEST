@@ -1359,10 +1359,9 @@ const App = () => {
 
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
-                // Also add the initial combat text to the main story log
                 const combatIntroSegment: StorySegment = {
                     text: data.text,
-                    illustration: null, // No illustration for the combat intro text
+                    illustration: null,
                 };
                 return {
                     ...prevState,
@@ -1371,7 +1370,8 @@ const App = () => {
                         enemies,
                         log: combatLog,
                         turn: 'player',
-                        availableActions: data.actions
+                        // MODIFY THIS LINE:
+                        availableActions: data.actions || ['Attack', 'Defend', 'Use Skill']
                     },
                     storyLog: [...prevState.storyLog, combatIntroSegment],
                 }
@@ -1640,7 +1640,8 @@ const App = () => {
                         ...prevState.combat,
                         enemies: newEnemies,
                         log: [...prevState.combat.log, ...newLog],
-                        availableActions: data.availableActions,
+                        // MODIFY THIS LINE:
+                        availableActions: data.availableActions || ['Attack', 'Defend', 'Use Skill'],
                     },
                 };
             });
