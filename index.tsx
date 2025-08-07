@@ -100,7 +100,7 @@ interface CreationData {
     skillPools: SkillPools;
     startingSkillPoints: number;
     startingEquipment: any;
-    background: string; 
+    background: string;
 }
 
 // Data from initial creation form
@@ -120,7 +120,7 @@ interface Equipment {
     damage?: number;
     damageReduction?: number;
   };
-  value: number; 
+  value: number;
 }
 
 // --- COMBAT TYPES ---
@@ -277,7 +277,7 @@ const nextStepSchema = {
                         required: ['name', 'description', 'hp']
                     }
                 },
-                initiateTransaction: { 
+                initiateTransaction: {
                     type: Type.BOOLEAN,
                     description: "Set to true to start a transaction with an NPC."
                 },
@@ -733,7 +733,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {/* --- DEBUG BUTTON --- 
+                    {/* --- DEBUG BUTTON ---
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
                             Sync HP to Level 16
@@ -746,7 +746,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     )}
                      --- END DEBUG BUTTON --- */}
 
-                    
+
 
 
                     <h3>Skills</h3>
@@ -863,8 +863,8 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onSyncHp }: { game
                         <div className="player-hp-bar" style={{ width: `${(character.hp / character.maxHp) * 100}%` }}></div>
                     </div>
                     <span>HP: {character.hp} / {character.maxHp}</span>
-                    
-                    {/* --- DEBUG BUTTON --- 
+
+                    {/* --- DEBUG BUTTON ---
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', marginTop: '1rem'}}>
                             Sync HP to Level 16
@@ -941,7 +941,7 @@ const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: Ga
                     <p>{transaction.vendorDescription}</p>
                 </div>
             </div>
-            
+
             <h2>Vendor's Wares</h2>
             <ul className="transaction-items">
                 {transaction.inventory.map(item => (
@@ -1053,7 +1053,7 @@ const App = () => {
                 }
                 // *** FIX: Add maxHp if it's missing from an old save ***
                 if (!savedGameState.character.maxHp) {
-                    savedGameState.character.maxHp = 100; 
+                    savedGameState.character.maxHp = 100;
                 }
             }
 
@@ -1296,10 +1296,10 @@ const App = () => {
                 safetySettings: safetySettings,
             },
         });
-        
+
         const data = JSON.parse(response.text).story;
-        
-        if (data.initiateCombat) {
+
+        if (data.initiateCombat && data.enemies && data.enemies.length > 0) {
             const enemyPortraits = await Promise.all(
                 data.enemies.map((enemy: any) => generateImage(enemy.description))
             );
@@ -1324,7 +1324,8 @@ const App = () => {
                     log: combatLog,
                     turn: 'player',
                     availableActions: data.actions
-                }
+                },
+                 storyLog: [...prevState.storyLog, { text: data.text, illustration: null }], // Add initial combat text to log
             }));
         } else if (data.initiateTransaction) {
             const vendorPortrait = await generateImage(data.transaction.vendorDescription);
@@ -1354,7 +1355,7 @@ const App = () => {
                         newReputation[faction] = (newReputation[faction] || 0) + change;
                     }
                 }
-                
+
                 // Handle equipment updates
                 const updatedEquipment = { ...prevState.character.equipment };
                 if (data.equipmentUpdates) {
@@ -1377,7 +1378,7 @@ const App = () => {
                         }
                     }
                 }
-                
+
                 const updatedCharacter = {
                     ...prevState.character,
                     hp: prevState.character.hp + data.didHpChange,
@@ -1525,6 +1526,10 @@ const App = () => {
         const data = JSON.parse(response.text).combatResult;
 
         if (data.combatOver) {
+             const victorySegment: StorySegment = {
+                text: data.victoryText || "You are victorious!",
+                illustration: await generateImage(`${gameState.storyGuidance.setting}. ${data.victoryText}`),
+            };
             setGameState(prevState => {
                 if (!prevState.character || !prevState.combat) return prevState;
                 const newPlayerHp = prevState.character.hp + data.playerHpChange;
@@ -1552,6 +1557,7 @@ const App = () => {
                     gameStatus: 'looting',
                     combat: null,
                     loot: newLoot,
+                    storyLog: [...prevState.storyLog, victorySegment]
                 };
             });
 
@@ -1597,6 +1603,8 @@ const App = () => {
 }, [gameState, generateImage]);
 
   const handleLootContinue = () => {
+    // This now just transitions the state, the story log is updated in handleCombatAction
+    handleAction("What happens now?");
     setGameState(prevState => ({
         ...prevState,
         gameStatus: 'playing',
@@ -1655,7 +1663,7 @@ const App = () => {
         // Calculate HP gain: 3d6 + current level
         const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
         const hpGain = diceRolls.reduce((a, b) => a + b, 0) + Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
-        
+
         const newMaxHp = g.character.maxHp + hpGain;
 
         return {
@@ -1675,7 +1683,7 @@ const App = () => {
   const handleSyncHp = () => {
         setGameState(g => {
             if (!g.character || g.character.name !== "Cinderblaze") return g;
-    
+
             let totalHp = 100;
             // Start from level 2 up to 16
             for (let level = 2; level <= 16; level++) {
@@ -1683,7 +1691,7 @@ const App = () => {
                 const hpGain = diceRolls.reduce((a, b) => a + b, 0) + level;
                 totalHp += hpGain;
             }
-    
+
             return {
                 ...g,
                 character: {
