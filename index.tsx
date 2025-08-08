@@ -35,6 +35,7 @@ interface Character {
   portrait: string | null; // base64 image
   storySummary?: string;
   reputation: { [key: string]: number };
+  alignment: Alignment;
   equipment: {
     weapon: Equipment | null;
     armor: Equipment | null;
@@ -60,6 +61,7 @@ interface Companion {
   description: string;
   skills: { [key: string]: number };
   personality: string; // e.g., "Loyal but cautious," "Brave and reckless"
+  alignment: Alignment;
   relationship: number; // A score from -100 to 100 representing their view of the player
 }
 
@@ -102,6 +104,7 @@ interface CreationData {
     startingSkillPoints: number;
     startingEquipment: any;
     background: string;
+    startingAlignment: Alignment;
     startingMap: {
         locations: Omit<MapLocation, 'visited'>[];
         startingLocationName: string;
@@ -176,6 +179,10 @@ interface MapState {
     locations: MapLocation[];
 }
 
+interface Alignment {
+    lawfulness: number; // -100 (Chaotic) to 100 (Lawful)
+    goodness: number;  // -100 (Evil) to 100 (Good)
+}
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -199,7 +206,23 @@ const characterGenSchema = {
         properties: {
           name: { type: Type.STRING },
           description: { type: Type.STRING },
+          alignment: {
+            type: Type.OBJECT,
+            properties: {
+                lawfulness: { type: Type.INTEGER, description: "Initial lawfulness score (-100 to 100)." },
+                goodness: { type: Type.INTEGER, description: "Initial goodness score (-100 to 100)." }
+            },
+            required: ['lawfulness', 'goodness']
+          },
           personality: { type: Type.STRING },
+          alignment: {
+            type: Type.OBJECT,
+            properties: {
+                lawfulness: { type: Type.INTEGER },
+                goodness: { type: Type.INTEGER }
+            },
+            required: ['lawfulness', 'goodness']
+          },
           skills: {
             type: Type.ARRAY,
             description: "An array of objects, where each object represents a skill and its level.",
@@ -304,6 +327,16 @@ const nextStepSchema = {
                 actions: { type: Type.ARRAY, items: { type: Type.STRING }, description: "A new array of 3-4 actions the player can take now."},
                 didHpChange: { type: Type.INTEGER, description: "The number of HP points the character gained or lost (e.g., -10 or 5). Should be 0 if no change."},
                 didXpChange: { type: Type.INTEGER, description: "The number of XP points the character gained. Should be 0 if no change."},
+                alignmentChange: {
+                    type: Type.OBJECT,
+                    description: "How the player's action affects their alignment. Omit if no change.",
+                    nullable: true,
+                    properties: {
+                        lawfulness: { type: Type.INTEGER, description: "Change in lawfulness (e.g., -5 for a chaotic act)." },
+                        goodness: { type: Type.INTEGER, description: "Change in goodness (e.g., 10 for a good act)." }
+                    },
+                    required: ['lawfulness', 'goodness']
+                },
                 initiateCombat: { type: Type.BOOLEAN, description: "Set to true if the story should now transition into a combat encounter."},
                 enemies: {
                     type: Type.ARRAY,
@@ -549,6 +582,33 @@ const imagePromptSchema = {
     required: ['prompt']
 };
 
+const alignmentSyncSchema = {
+    type: Type.OBJECT,
+    properties: {
+        playerAlignment: {
+            type: Type.OBJECT,
+            properties: {
+                lawfulness: { type: Type.INTEGER },
+                goodness: { type: Type.INTEGER }
+            },
+            required: ['lawfulness', 'goodness']
+        },
+        companionAlignments: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    name: { type: Type.STRING },
+                    lawfulness: { type: Type.INTEGER },
+                    goodness: { type: Type.INTEGER }
+                },
+                required: ['name', 'lawfulness', 'goodness']
+            }
+        }
+    },
+    required: ['playerAlignment', 'companionAlignments']
+};
+
 // --- STATIC DATA ---
 const RACES = ["Human", "Elf", "Dwarf", "Orc", "Halfling", "Gnome", "Dragonborn", "Tiefling", "Half-Elf"];
 const CLASSES = ["Warrior", "Paladin", "Ranger", "Rogue", "Monk", "Barbarian", "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard", "Artificer", "Blood Hunter", "Death Knight", "Demon Hunter", "Spellblade", "Necromancer", "Summoner", "Elementalist", "Shaman", "Templar", "Assassin", "Swashbuckler", "Gunslinger", "Alchemist", "Berserker", "Gladiator", "Scout", "Inquisitor"];
@@ -774,7 +834,7 @@ const MapPanel = ({ mapState, onLocationClick, isLoading }: { mapState: MapState
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void }) => {
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap, getAlignmentDescriptor }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void, getAlignmentDescriptor: (alignment: Alignment) => string }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
@@ -839,6 +899,17 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                 <div className="character-panel">
                     <img src={character.portrait || ''} alt={`${character.name}'s portrait`} className="character-portrait" />
                     <h2>{character.name}</h2>
+                    {character.alignment && (
+                        <div className="alignment-display">
+                            <div className="alignment-grid">
+                                <div className="alignment-marker" style={{ 
+                                    left: `${50 + character.alignment.lawfulness / 2}%`, 
+                                    top: `${50 - character.alignment.goodness / 2}%` 
+                                }}></div>
+                            </div>
+                            <span className="alignment-label">{getAlignmentDescriptor(character.alignment)}</span>
+                        </div>
+                    )}
                     <div className="stats-grid">
                         <div className="stat-item">
                             <span className="stat-label">HP</span>
@@ -1367,6 +1438,7 @@ const App = () => {
             return {
                 ...comp,
                 skills: skillsObject, // Replace the array with the new object
+                alignment: comp.alignment,
                 relationship: 0
             };
         });
@@ -1382,6 +1454,7 @@ const App = () => {
             startingSkillPoints: data.startingSkillPoints,
             startingEquipment: data.startingEquipment,
             background: details.background,
+            startingAlignment: data.character.alignment,
             startingMap: data.map,
         });
         setGameState(g => ({...g, companions: initialCompanions, gameStatus: 'characterCustomize'}));
@@ -1431,6 +1504,7 @@ const App = () => {
             skillPoints: 0,
             description: creationData.description,
             portrait: portrait,
+            alignment: creationData.startingAlignment,
             reputation: {},
             equipment: creationData.startingEquipment,
             gold: startingGold,
@@ -1586,6 +1660,11 @@ const App = () => {
                 const oldXp = prevState.character.xp;
                 const newXp = oldXp + data.didXpChange;
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
+                const newAlignment = { ...prevState.character.alignment };
+                if (data.alignmentChange) {
+                    newAlignment.lawfulness = Math.max(-100, Math.min(100, newAlignment.lawfulness + data.alignmentChange.lawfulness));
+                    newAlignment.goodness = Math.max(-100, Math.min(100, newAlignment.goodness + data.alignmentChange.goodness));
+                }
                 const newReputation = { ...prevState.character.reputation };
                 if (data.reputationChange) {
                     for (const [faction, change] of Object.entries(data.reputationChange)) {
@@ -1634,11 +1713,24 @@ const App = () => {
                     }
                 }
 
+                updatedCompanions.forEach(comp => {
+                    if(data.alignmentChange) {
+                        const lawfulnessDiff = Math.abs(newAlignment.lawfulness - comp.alignment.lawfulness);
+                        const goodnessDiff = Math.abs(newAlignment.goodness - comp.alignment.goodness);
+                        // If alignments are becoming more different, slightly decrease relationship
+                        if (lawfulnessDiff > Math.abs(prevState.character.alignment.lawfulness - comp.alignment.lawfulness) ||
+                            goodnessDiff > Math.abs(prevState.character.alignment.goodness - comp.alignment.goodness)) {
+                            comp.relationship -= 1;
+                        }
+                    }
+                });
+
                 const updatedCharacter = {
                     ...prevState.character,
                     hp: prevState.character.hp + data.didHpChange,
                     xp: newXp,
                     skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                    alignment: newAlignment,
                     reputation: newReputation,
                     equipment: updatedEquipment,
                 };
@@ -1987,6 +2079,72 @@ const App = () => {
     }
   }, [gameState, generateImage]);
 
+  const handleSyncAlignment = useCallback(async () => {
+    if (!gameState.character || !gameState.storyLog || gameState.storyLog.length === 0) {
+        console.log("Not enough story history to sync alignment.");
+        return;
+    }
+    setApiIsLoading(true);
+    console.log("Syncing alignment based on story history...");
+
+    try {
+        const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+        const companionNames = gameState.companions.map(c => c.name).join(', ');
+
+        const prompt = `
+            Analyze the following story from a text adventure game. Based on the actions and events, determine the alignment of the main character (${gameState.character.name}) and their companions (${companionNames}).
+            Return the alignment scores on a scale of -100 (Chaotic/Evil) to 100 (Lawful/Good).
+
+            - A lawful character follows rules, traditions, or a personal code. A chaotic character follows their whims, valuing freedom over order.
+            - A good character protects the innocent and helps others. An evil character is willing to harm, oppress, or kill others for their own gain.
+
+            Story:
+            ---
+            ${storyHistory}
+            ---
+        `;
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: alignmentSyncSchema,
+                safetySettings: safetySettings,
+            },
+        });
+
+        const data = JSON.parse(response.text);
+
+        setGameState(prevState => {
+            if (!prevState.character) return prevState;
+
+            // Update companions with new alignment data
+            const updatedCompanions = prevState.companions.map(comp => {
+                const syncedComp = data.companionAlignments.find((sc: any) => sc.name === comp.name);
+                return syncedComp
+                    ? { ...comp, alignment: { lawfulness: syncedComp.lawfulness, goodness: syncedComp.goodness } }
+                    : comp; // Keep old alignment if not found in sync data
+            });
+
+            return {
+                ...prevState,
+                character: {
+                    ...prevState.character,
+                    alignment: data.playerAlignment
+                },
+                companions: updatedCompanions
+            };
+        });
+
+        console.log("Alignment sync complete!");
+
+    } catch (error) {
+        console.error("Alignment sync failed:", error);
+    } finally {
+        setApiIsLoading(false);
+    }
+  }, [gameState]);
 
   const handleSyncHp = () => {
         setGameState(g => {
@@ -2046,7 +2204,7 @@ const App = () => {
     });
   };
 
-  useEffect(() => {
+   useEffect(() => {
     const handleForceActions = () => {
       console.log("Force combat actions command received.");
       setGameState(prevState => {
@@ -2065,12 +2223,27 @@ const App = () => {
 
     window.addEventListener('force-combat-actions', handleForceActions);
     (window as any).syncMap = handleSyncMap;
-
+    (window as any).syncAlignment = handleSyncAlignment; // Add this line
 
     return () => {
       window.removeEventListener('force-combat-actions', handleForceActions);
     };
-  }, [handleSyncMap]); // The empty dependency array means this runs only once
+  }, [handleSyncMap, handleSyncAlignment]); // The empty dependency array means this runs only once
+  
+
+  const getAlignmentDescriptor = (alignment: Alignment): string => {
+        const { lawfulness, goodness } = alignment;
+        let descriptor = "";
+
+        if (goodness > 33) descriptor += "Good";
+        else if (goodness < -33) descriptor += "Evil";
+        else descriptor += "Neutral";
+
+        if (lawfulness > 33) descriptor = "Lawful " + descriptor;
+        else if (lawfulness < -33) descriptor = "Chaotic " + descriptor;
+
+        return descriptor.trim();
+  };
 
   const renderContent = () => {
     switch (gameState.gameStatus) {
@@ -2085,6 +2258,7 @@ const App = () => {
                     onSyncHp={handleSyncHp}
                     onSyncGoldAndLoot={handleSyncGoldAndLoot}
                     onSyncMap={handleSyncMap}
+                    getAlignmentDescriptor={getAlignmentDescriptor}
                 />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;
