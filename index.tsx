@@ -88,6 +88,7 @@ interface GameState {
   combat: CombatState | null;
   loot: Loot | null;
   transaction: TransactionState | null;
+  map: MapState | null;
 }
 
 // Data stored before character is finalized
@@ -156,6 +157,21 @@ interface TransactionState {
     vendorPortrait: string | null;
     inventory: Equipment[];
 }
+
+// --- MAP TYPES ---
+interface MapLocation {
+    name: string;
+    x: number; // Percentage from left
+    y: number; // Percentage from top
+    visited: boolean;
+    description: string; // A prompt for image generation
+}
+
+interface MapState {
+    backgroundImage: string | null;
+    locations: MapLocation[];
+}
+
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -303,6 +319,32 @@ const nextStepSchema = {
                         }
                     }
                 },
+                mapUpdate: {
+                    type: Type.OBJECT,
+                    description: "Updates to the world map. Can include new locations or updating existing ones.",
+                    nullable: true,
+                    properties: {
+                        newLocations: {
+                            type: Type.ARRAY,
+                            description: "A list of new locations to add to the map.",
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    x: { type: Type.INTEGER, description: "X-coordinate (percentage from left, 0-100)" },
+                                    y: { type: Type.INTEGER, description: "Y-coordinate (percentage from top, 0-100)" },
+                                    description: { type: Type.STRING, description: "A detailed visual description of the location for generating an image." }
+                                },
+                                required: ['name', 'x', 'y', 'description']
+                            }
+                        },
+                        updateVisited: {
+                            type: Type.STRING,
+                            description: "The name of the location the player has just visited.",
+                            nullable: true
+                        }
+                    }
+                },
                 companionUpdates: {
                     type: Type.ARRAY,
                     description: "An array of updates for companions. Includes relationship changes.",
@@ -374,7 +416,7 @@ const nextStepSchema = {
                     required: ['skillName', 'success', 'difficulty']
                 }
             },
-            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay']
+            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay', 'mapUpdate']
         }
     },
     required: ['story']
@@ -449,6 +491,26 @@ const storySummarySchema = {
     }
   },
   required: ['summary']
+};
+
+const mapGenSchema = {
+    type: Type.OBJECT,
+    properties: {
+        locations: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    name: { type: Type.STRING },
+                    x: { type: Type.INTEGER, description: "X-coordinate (percentage from left, 0-100)" },
+                    y: { type: Type.INTEGER, description: "Y-coordinate (percentage from top, 0-100)" },
+                    description: { type: Type.STRING }
+                },
+                required: ['name', 'x', 'y', 'description']
+            }
+        }
+    },
+    required: ['locations']
 };
 
 // --- STATIC DATA ---
@@ -651,14 +713,39 @@ const SkillAllocator = ({ title, skillPools, availablePoints, initialSkills = {}
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void }) => {
+const MapPanel = ({ mapState, onLocationClick, isLoading }: { mapState: MapState | null, onLocationClick: (locationName: string) => void, isLoading: boolean }) => {
+    if (!mapState) {
+        return <div className="map-panel"><Loader text="Loading map..." /></div>;
+    }
+
+    return (
+        <div className="map-panel">
+            {isLoading && <div className="illustration-loader"><Loader text="Traveling..." /></div>}
+            <img src={mapState.backgroundImage || ''} alt="World Map" className="map-image" />
+            {mapState.locations.map(location => (
+                <button
+                    key={location.name}
+                    className={`map-location-btn ${location.visited ? 'visited' : ''}`}
+                    style={{ left: `${location.x}%`, top: `${location.y}%` }}
+                    onClick={() => onLocationClick(location.name)}
+                    disabled={isLoading}
+                    title={location.description}
+                >
+                    {location.name}
+                </button>
+            ))}
+        </div>
+    );
+};
+
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
         return <Loader text="Loading game..." />;
     }
 
-    const { character, storyLog, currentActions } = gameState;
+    const { character, storyLog, currentActions, map } = gameState;
     const currentScene = storyLog[storyLog.length - 1];
 
     useEffect(() => {
@@ -700,6 +787,10 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
         utterance.onerror = () => setIsSpeaking(false);
 
         speechSynthesis.speak(utterance);
+    };
+    
+    const handleLocationClick = (locationName: string) => {
+        onAction(`Travel to ${locationName}`);
     };
 
     return (
@@ -746,8 +837,11 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     )}
                      --- END DEBUG BUTTON --- */}
 
-
-
+                    {character.name === "Cinderblaze" && (
+                        <button onClick={onSyncMap} className="level-up-btn" style={{backgroundColor: '#9b59b6', marginTop: '0.5rem'}}>
+                            Sync Map
+                        </button>
+                    )}
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
@@ -797,46 +891,49 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         )}
                     </ul>
                 </div>
-                <div className="story-panel">
-                    <div className="illustration-container">
-                       {isLoading && <div className="illustration-loader"><Loader text="Drawing next scene..."/></div>}
-                       <img src={currentScene.illustration || ''} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
-                    </div>
-                    <div className="story-text">
-                        <button
-                            className="play-audio-btn"
-                            onClick={() => handlePlayAudio(currentScene.text, character.gender)}
-                            aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
-                        >
-                            {isSpeaking ? '⏹️' : '▶️'}
-                        </button>
-                        {/* Display skill check result here */}
-                        {currentScene.skillCheck && (
-                            <p style={{
-                                fontStyle: 'italic',
-                                color: currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c',
-                                textAlign: 'center',
-                                border: `1px solid ${currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c'}`,
-                                padding: '0.5rem',
-                                borderRadius: 'var(--border-radius)',
-                                marginBottom: '1rem',
-                                backgroundColor: 'rgba(0,0,0,0.2)'
-                            }}>
-                                Your <b>{currentScene.skillCheck.skillName}</b> check ({currentScene.skillCheck.difficulty}) was a <b style={{textTransform: 'uppercase'}}>{currentScene.skillCheck.success ? 'success' : 'failure'}</b>!
-                            </p>
-                        )}
-                        <p>{currentScene.text}</p>
-                    </div>
-                    <div className="actions-panel">
-                        {currentActions.map(action => (
-                            <button key={action} onClick={() => onAction(action)} disabled={isLoading}>
-                                {action}
+                <div className="game-content-area">
+                    <div className="story-panel">
+                        <div className="illustration-container">
+                           {isLoading && <div className="illustration-loader"><Loader text="Drawing next scene..."/></div>}
+                           <img src={currentScene.illustration || ''} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
+                        </div>
+                        <div className="story-text">
+                            <button
+                                className="play-audio-btn"
+                                onClick={() => handlePlayAudio(currentScene.text, character.gender)}
+                                aria-label={isSpeaking ? 'Stop narration' : 'Play narration'}
+                            >
+                                {isSpeaking ? '⏹️' : '▶️'}
                             </button>
-                        ))}
-                        <button onClick={onCustomActionClick} disabled={isLoading} className="custom-action-btn">
-                            Custom Action...
-                        </button>
+                            {/* Display skill check result here */}
+                            {currentScene.skillCheck && (
+                                <p style={{
+                                    fontStyle: 'italic',
+                                    color: currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c',
+                                    textAlign: 'center',
+                                    border: `1px solid ${currentScene.skillCheck.success ? '#2ecc71' : '#e74c3c'}`,
+                                    padding: '0.5rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    marginBottom: '1rem',
+                                    backgroundColor: 'rgba(0,0,0,0.2)'
+                                }}>
+                                    Your <b>{currentScene.skillCheck.skillName}</b> check ({currentScene.skillCheck.difficulty}) was a <b style={{textTransform: 'uppercase'}}>{currentScene.skillCheck.success ? 'success' : 'failure'}</b>!
+                                </p>
+                            )}
+                            <p>{currentScene.text}</p>
+                        </div>
+                        <div className="actions-panel">
+                            {currentActions.map(action => (
+                                <button key={action} onClick={() => onAction(action)} disabled={isLoading}>
+                                    {action}
+                                </button>
+                            ))}
+                            <button onClick={onCustomActionClick} disabled={isLoading} className="custom-action-btn">
+                                Custom Action...
+                            </button>
+                        </div>
                     </div>
+                    <MapPanel mapState={map} onLocationClick={handleLocationClick} isLoading={isLoading} />
                 </div>
             </main>
         </div>
@@ -1035,6 +1132,7 @@ const App = () => {
     combat: null,
     loot: null,
     transaction: null,
+    map: null,
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
@@ -1044,7 +1142,7 @@ const App = () => {
     try {
         const response = await ai.models.generateImages({
             model: 'imagen-3.0-generate-002',
-            prompt: `fantasy art, digital painting. ${prompt}`,
+            prompt: `fantasy art, digital painting, no text, no labels, no header text, no footer text. ${prompt}`,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
@@ -1077,6 +1175,7 @@ const App = () => {
         combat: null,
         loot: null,
         transaction: null,
+        map: null,
       }));
   }, [setGameState, setCreationData]); // Add dependencies
 
@@ -1099,6 +1198,27 @@ const App = () => {
                 }
             }
 
+            if (savedGameState.character && !savedGameState.map) {
+                  console.log("Old save detected. Generating new map...");
+                  const mapImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+                  const startingLocation: MapLocation = {
+                      name: "Starting Point",
+                      x: 50,
+                      y: 50,
+                      visited: true,
+                      description: savedGameState.storyLog[0]?.text || "The beginning of your journey."
+                  };
+                  savedGameState.map = {
+                      backgroundImage: mapImage,
+                      locations: [startingLocation]
+                  };
+            }
+
+            if (savedGameState.map && !savedGameState.map.backgroundImage) {
+                  // Regenerate map image if it's missing but the map object exists
+                  savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+            }
+            
             // Regenerate the last story illustration if it's missing
             if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
                 const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
@@ -1146,6 +1266,7 @@ const App = () => {
           }
           return { ...segment, illustration: null };
         }),
+        map: gameState.map ? { ...gameState.map, backgroundImage: null } : null
       };
       localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
     }
@@ -1227,10 +1348,20 @@ const App = () => {
      setGameState(g => ({...g, gameStatus: 'loading'}));
 
      try {
-        const [portrait, illustration] = await Promise.all([
+        const [portrait, illustration, mapImage] = await Promise.all([
             generateImage(creationData.description),
-            generateImage(`${creationData.storyGuidance.setting}. ${creationData.initialStory.text}`)
+            generateImage(`${creationData.storyGuidance.setting}. ${creationData.initialStory.text}`),
+            generateImage(`A fantasy world map, with continents, oceans, and mountains. Labelled with ancient text.`)
         ]);
+        
+        const startingLocation: MapLocation = {
+            name: "Starting Point",
+            x: 50,
+            y: 50,
+            visited: true,
+            description: creationData.initialStory.text
+        };
+
 
         let startingGold = Math.floor(Math.random() * 100) + 1;
         if (["Noble", "Royalty", "Merchant"].includes(creationData.background)) {
@@ -1262,6 +1393,10 @@ const App = () => {
             skillPools: creationData.skillPools,
             storyLog: [initialSegment],
             currentActions: creationData.initialStory.actions,
+            map: {
+                backgroundImage: mapImage,
+                locations: [startingLocation]
+            },
             gameStatus: 'playing'
         }));
         setCreationData(null); // Clean up temp data
@@ -1321,6 +1456,8 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
+            If the player discovers a new location, add it to the 'mapUpdate.newLocations' array. Also, if the player travels to a location, update 'mapUpdate.updateVisited' with the location's name.
+
             If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check against a difficulty. The player's skill level should influence the success. Populate the 'skillCheck' field with the results. The 'text' field should narrate the outcome of the skill check.
 
             Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
@@ -1427,6 +1564,24 @@ const App = () => {
                         }
                     }
                 }
+                
+                 // Handle map updates
+                const updatedMap = prevState.map ? { ...prevState.map, locations: [...prevState.map.locations] } : null;
+                if (updatedMap && data.mapUpdate) {
+                    if (data.mapUpdate.newLocations) {
+                        data.mapUpdate.newLocations.forEach((newLoc: any) => {
+                            if (!updatedMap.locations.some(l => l.name === newLoc.name)) {
+                                updatedMap.locations.push({ ...newLoc, visited: false });
+                            }
+                        });
+                    }
+                    if (data.mapUpdate.updateVisited) {
+                        const locIndex = updatedMap.locations.findIndex(l => l.name === data.mapUpdate.updateVisited);
+                        if (locIndex !== -1) {
+                            updatedMap.locations[locIndex].visited = true;
+                        }
+                    }
+                }
 
                 const updatedCharacter = {
                     ...prevState.character,
@@ -1472,6 +1627,7 @@ const App = () => {
                     timeOfDay: data.newTimeOfDay,
                     storyLog: [...prevState.storyLog, newSegment].slice(-100),
                     currentActions: data.actions,
+                    map: updatedMap,
                 };
             });
         }
@@ -1790,6 +1946,58 @@ const App = () => {
     });
   };
 
+  const handleSyncMap = useCallback(async () => {
+        if (!gameState.character || !gameState.storyGuidance || !gameState.storyLog) return;
+        setApiIsLoading(true);
+
+        try {
+            const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+            const prompt = `
+                Based on the following story, generate a list of 5-7 key locations.
+                These locations should be a mix of places the player has visited and places that have been mentioned but not yet explored.
+                For each location, provide a name, a brief description, and x/y coordinates for a map.
+
+                Story:
+                ${storyHistory}
+            `;
+
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: mapGenSchema,
+                    safetySettings: safetySettings,
+                },
+            });
+
+            const data = JSON.parse(response.text);
+            const mapImage = await generateImage(`A fantasy world map for a story about ${gameState.storyGuidance.plot}.`);
+
+            const newLocations: MapLocation[] = data.locations.map((loc: any) => ({
+                ...loc,
+                visited: gameState.storyLog.some(segment => segment.text.includes(loc.name))
+            }));
+
+            setGameState(prevState => ({
+                ...prevState,
+                map: {
+                    backgroundImage: mapImage,
+                    locations: newLocations
+                }
+            }));
+
+        } catch (error) {
+            console.error("Map sync failed:", error);
+        } finally {
+            setApiIsLoading(false);
+        }
+  }, [gameState, generateImage]);
+  
+  useEffect(() => {
+    (window as any).syncMap = handleSyncMap;
+  }, [handleSyncMap]);
+
   useEffect(() => {
     const handleForceActions = () => {
       console.log("Force combat actions command received.");
@@ -1826,7 +2034,7 @@ const App = () => {
                     onCustomActionClick={() => setIsCustomActionModalOpen(true)}
                     onSyncHp={handleSyncHp}
                     onSyncGoldAndLoot={handleSyncGoldAndLoot}
-
+                    onSyncMap={handleSyncMap}
                 />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;
