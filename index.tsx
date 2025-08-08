@@ -102,6 +102,10 @@ interface CreationData {
     startingSkillPoints: number;
     startingEquipment: any;
     background: string;
+    startingMap: {
+        locations: Omit<MapLocation, 'visited'>[];
+        startingLocationName: string;
+    };
 }
 
 // Data from initial creation form
@@ -263,11 +267,32 @@ const characterGenSchema = {
           gear: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } }, value: { type: Type.INTEGER } }, required: ['name', 'description', 'stats', 'value'] } }
       },
       required: ['weapon', 'armor', 'gear']
+    },
+    map: {
+        type: Type.OBJECT,
+        description: "The initial state of the world map.",
+        properties: {
+            locations: {
+                type: Type.ARRAY,
+                description: "An array of 5-7 starting locations on the map.",
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING },
+                        x: { type: Type.INTEGER, description: "X-coordinate (percentage from left, 0-100)" },
+                        y: { type: Type.INTEGER, description: "Y-coordinate (percentage from top, 0-100)" },
+                        description: { type: Type.STRING }
+                    },
+                    required: ['name', 'x', 'y', 'description']
+                }
+            },
+            startingLocationName: { type: Type.STRING, description: "The name of the location from the list where the story begins." }
+        },
+        required: ['locations', 'startingLocationName']
     }
   },
-  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companions', 'startingEquipment']
+  required: ['character', 'storyGuidance', 'initialStory', 'skillPools', 'startingSkillPoints', 'companions', 'startingEquipment', 'map']
 };
-
 
 const nextStepSchema = {
     type: Type.OBJECT,
@@ -511,6 +536,17 @@ const mapGenSchema = {
         }
     },
     required: ['locations']
+};
+
+const imagePromptSchema = {
+    type: Type.OBJECT,
+    properties: {
+        prompt: {
+            type: Type.STRING,
+            description: "A concise, sanitized, and effective image generation prompt, focusing on key visual elements for fantasy art."
+        }
+    },
+    required: ['prompt']
 };
 
 // --- STATIC DATA ---
@@ -788,7 +824,7 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
 
         speechSynthesis.speak(utterance);
     };
-    
+
     const handleLocationClick = (locationName: string) => {
         onAction(`Travel to ${locationName}`);
     };
@@ -824,25 +860,22 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </button>
                     )}
 
-                    {/* --- DEBUG BUTTON ---
+                    {/* --- DEBUG BUTTONS ---
                     {character.name === "Cinderblaze" && (
-                        <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2'}}>
-                            Sync HP to Level 16
-                        </button>
+                        <>
+                            <button onClick={onSyncHp} className="level-up-btn" style={{backgroundColor: '#4a90e2', animation: 'none', marginBottom: '0.5rem'}}>
+                                Sync HP to Level 16
+                            </button>
+                            <button onClick={onSyncGoldAndLoot} className="level-up-btn" style={{backgroundColor: '#f39c12', animation: 'none', marginBottom: '0.5rem'}}>
+                                Sync Gold & Loot
+                            </button>
+                            <button onClick={onSyncMap} className="level-up-btn" style={{backgroundColor: '#9b59b6', animation: 'none', marginBottom: '1.5rem'}}>
+                                Sync Map
+                            </button>
+                        </>
                     )}
-                    {character.name === "Cinderblaze" && (
-                        <button onClick={onSyncGoldAndLoot} className="level-up-btn" style={{backgroundColor: '#f39c12', marginTop: '0.5rem'}}>
-                            Sync Gold & Loot
-                        </button>
-                    )}
-                    {character.name === "Cinderblaze" && (
-                        <button onClick={onSyncMap} className="level-up-btn" style={{backgroundColor: '#9b59b6', marginTop: '0.5rem'}}>
-                            Sync Map
-                        </button>
-                    )}
-                     --- END DEBUG BUTTON --- */}
+                     --- END DEBUG BUTTONS --- */}
 
-                    
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
@@ -1141,9 +1174,23 @@ const App = () => {
 
   const generateImage = useCallback(async (prompt: string): Promise<string | null> => {
     try {
-        const response = await ai.models.generateImages({
+        // Step 1: Generate a sanitized prompt with Gemini
+        const promptGenerationResponse = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Based on the following description, create a concise, sanitized, and effective image generation prompt suitable for a fantasy art style. Focus on the key visual elements. Description: "${prompt}"`,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: imagePromptSchema,
+                safetySettings: safetySettings,
+            },
+        });
+        const sanitizedData = JSON.parse(promptGenerationResponse.text);
+        const finalPrompt = sanitizedData.prompt;
+
+        // Step 2: Use the sanitized prompt to generate the image
+        const imageResponse = await ai.models.generateImages({
             model: 'imagen-3.0-generate-002',
-            prompt: `fantasy art, digital painting, no text, no labels, no header text, no footer text. ${prompt}`,
+            prompt: `fantasy art, digital painting. ${finalPrompt}`,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
@@ -1151,7 +1198,7 @@ const App = () => {
                 safetySettings: safetySettings,
             },
         });
-        const base64ImageBytes = response.generatedImages[0].image.imageBytes;
+        const base64ImageBytes = imageResponse.generatedImages[0].image.imageBytes;
         return `data:image/jpeg;base64,${base64ImageBytes}`;
     } catch (error) {
         console.error("Image generation failed:", error);
@@ -1182,76 +1229,77 @@ const App = () => {
 
   // Load from localStorage on startup
   useEffect(() => {
-      const loadGame = async () => {
-        try {
-          const savedStateJSON = localStorage.getItem('endlessAdventureSave');
-          if (savedStateJSON) {
-            const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
+    const loadGame = async () => {
+      try {
+        const savedStateJSON = localStorage.getItem('endlessAdventureSave');
+        if (savedStateJSON) {
+          const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
 
-            if (savedGameState.character) {
-                // Regenerate character portrait on load if it's missing
-                if (!savedGameState.character.portrait) {
-                    savedGameState.character.portrait = await generateImage(savedGameState.character.description);
-                }
-                // *** FIX: Add maxHp if it's missing from an old save ***
-                if (!savedGameState.character.maxHp) {
-                    savedGameState.character.maxHp = 100;
-                }
-            }
-
-            if (savedGameState.character && !savedGameState.map) {
-                  console.log("Old save detected. Generating new map...");
-                  const mapImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
-                  const startingLocation: MapLocation = {
-                      name: "Starting Point",
-                      x: 50,
-                      y: 50,
-                      visited: true,
-                      description: savedGameState.storyLog[0]?.text || "The beginning of your journey."
-                  };
-                  savedGameState.map = {
-                      backgroundImage: mapImage,
-                      locations: [startingLocation]
-                  };
-            }
-
-            if (savedGameState.map && !savedGameState.map.backgroundImage) {
-                  // Regenerate map image if it's missing but the map object exists
-                  savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
-            }
-            
-            // Regenerate the last story illustration if it's missing
-            if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
-                const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
-                if (!lastSegment.illustration) {
-                    lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
-                }
-            }
-
-            // IMPORTANT: Merge with defaults to prevent errors from old saves
-            setGameState(prevState => ({
-                ...prevState,
-                ...savedGameState
-            }));
-
-            if (savedCreationData) {
-              setCreationData(savedCreationData);
-            }
-
-          } else {
-            // If there's no save file, start a new game.
-            handleNewGame();
+          if (savedGameState.character) {
+              // Regenerate character portrait on load if it's missing
+              if (!savedGameState.character.portrait) {
+                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+              }
+              // *** FIX: Add maxHp if it's missing from an old save ***
+              if (!savedGameState.character.maxHp) {
+                  savedGameState.character.maxHp = 100;
+              }
           }
-        } catch (error) {
-          console.error("Failed to load or parse saved state, starting new game:", error);
-          // If the save file is corrupted, start a new game.
+
+          // --- FIX FOR OLD SAVES: Generate map if it doesn't exist ---
+          if (savedGameState.character && !savedGameState.map) {
+              console.log("Old save detected. Generating new map...");
+              const mapImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+              const startingLocation: MapLocation = {
+                  name: "Starting Point",
+                  x: 50,
+                  y: 50,
+                  visited: true,
+                  description: savedGameState.storyLog[0]?.text || "The beginning of your journey."
+              };
+              savedGameState.map = {
+                  backgroundImage: mapImage,
+                  locations: [startingLocation]
+              };
+          } else if (savedGameState.map && !savedGameState.map.backgroundImage) {
+              // Regenerate map image if it's missing but the map object exists
+              savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+          }
+          // --- END FIX ---
+
+
+          // Regenerate the last story illustration if it's missing
+          if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
+              const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
+              if (!lastSegment.illustration) {
+                  lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
+              }
+          }
+
+          // IMPORTANT: Merge with defaults to prevent errors from old saves
+          setGameState(prevState => ({
+              ...prevState,
+              ...savedGameState
+          }));
+
+          if (savedCreationData) {
+            setCreationData(savedCreationData);
+          }
+
+        } else {
+          // If there's no save file, start a new game.
           handleNewGame();
         }
-      };
+      } catch (error) {
+        console.error("Failed to load or parse saved state, starting new game:", error);
+        // If the save file is corrupted, start a new game.
+        handleNewGame();
+      }
+    };
 
-      loadGame();
-      // This useEffect should ONLY run once on startup.
-  }, [generateImage, handleNewGame]);
+    loadGame();
+    // This useEffect should ONLY run once on startup.
+}, [generateImage, handleNewGame]);
 
   // Save to localStorage on change
   useEffect(() => {
@@ -1281,7 +1329,8 @@ const App = () => {
 
     try {
         const prompt = `
-            Generate a fantasy character, story guidance, skill pools, and an opening scene for a text adventure game.
+            Generate a fantasy character, story guidance, skill pools, an opening scene, and an initial world map for a text adventure game.
+            The world is named Aerthos. The capital kingdom is Aethelgard.
             The player has defined their character with the following attributes:
             - Name: '${name}'
             - Gender: ${gender}
@@ -1290,10 +1339,11 @@ const App = () => {
             - Background: ${background}
             - Desired Campaign Type: ${campaign}
 
-            Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes, especially the Desired Campaign Type. For example, a 'Revenge Story' should start with an event that gives the character a reason for vengeance. Ensure the character description is detailed and suitable for generating a portrait.
-            Generate a set of starting equipment (weapon, armor, and a few pieces of gear) for the character and their companions, making it unique and appropriate to their class and background. The equipment should have a name, a short description, and stats like damage or damage reduction. The companion equipment should be stored as 'startingEquipment' under each companion object. The player character's starting equipment should be stored under 'startingEquipment' at the root level of the JSON response.
+            Base the character's description, the initial story, the plot, and the available skill pools on all of these attributes.
+            IMPORTANT: For the map, generate 5-7 key starting locations in the world of Aerthos, including Aethelgard. Populate the 'map.locations' array and specify which of these is the 'map.startingLocationName'.
+            The initial story text must mention the starting location by name.
+            Generate a set of starting equipment for the character and their companions, making it unique and appropriate.
             IMPORTANT: For the companions, please generate unique names and personalities. Avoid using the names Kaelen, Lyra, Elara, and Gorok.
-
         `;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -1332,6 +1382,7 @@ const App = () => {
             startingSkillPoints: data.startingSkillPoints,
             startingEquipment: data.startingEquipment,
             background: details.background,
+            startingMap: data.map,
         });
         setGameState(g => ({...g, companions: initialCompanions, gameStatus: 'characterCustomize'}));
 
@@ -1349,19 +1400,18 @@ const App = () => {
      setGameState(g => ({...g, gameStatus: 'loading'}));
 
      try {
+        const mapImagePrompt = `An antique, hand-drawn fantasy map of the world of Aerthos. It should depict the following locations: ${creationData.startingMap.locations.map(l => l.name).join(', ')}. The map should have a vintage, weathered look, with a compass rose and perhaps some sea monsters in the oceans.`;
+
         const [portrait, illustration, mapImage] = await Promise.all([
             generateImage(creationData.description),
             generateImage(`${creationData.storyGuidance.setting}. ${creationData.initialStory.text}`),
-            generateImage(`A fantasy world map, with continents, oceans, and mountains. Labelled with ancient text.`)
+            generateImage(mapImagePrompt)
         ]);
-        
-        const startingLocation: MapLocation = {
-            name: "Starting Point",
-            x: 50,
-            y: 50,
-            visited: true,
-            description: creationData.initialStory.text
-        };
+
+        const finalLocations: MapLocation[] = creationData.startingMap.locations.map(loc => ({
+            ...loc,
+            visited: loc.name === creationData.startingMap.startingLocationName
+        }));
 
 
         let startingGold = Math.floor(Math.random() * 100) + 1;
@@ -1396,7 +1446,7 @@ const App = () => {
             currentActions: creationData.initialStory.actions,
             map: {
                 backgroundImage: mapImage,
-                locations: [startingLocation]
+                locations: finalLocations
             },
             gameStatus: 'playing'
         }));
@@ -1462,7 +1512,7 @@ const App = () => {
             If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check against a difficulty. The player's skill level should influence the success. Populate the 'skillCheck' field with the results. The 'text' field should narrate the outcome of the skill check.
 
             Update companion relationships if their opinion of the player changes. If the story presents an opportunity, you can introduce a *new* character for the player to potentially recruit by populating the 'newCompanion' field.
-            Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', or 'update' an item. Be sure to provide the full details of the new item and its stats.
+            Use the 'equipmentUpdates' field to change the character's gear. An update can be to 'add', 'remove', 'replace', 'update' an item. Be sure to provide the full details of the new item and its stats.
             If the action leads to a fight, set 'initiateCombat' to true and provide a list of enemies.
             If the action leads to a transaction with a merchant, set 'initiateTransaction' to true and provide the vendor's details and inventory.
         `;
@@ -1565,7 +1615,7 @@ const App = () => {
                         }
                     }
                 }
-                
+
                  // Handle map updates
                 const updatedMap = prevState.map ? { ...prevState.map, locations: [...prevState.map.locations] } : null;
                 if (updatedMap && data.mapUpdate) {
@@ -1889,6 +1939,55 @@ const App = () => {
       });
   };
 
+  const handleSyncMap = useCallback(async () => {
+    if (!gameState.character || !gameState.storyGuidance || !gameState.storyLog) return;
+    setApiIsLoading(true);
+
+    try {
+        const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+        const prompt = `
+            Based on the following story, generate a list of 5-7 key locations.
+            These locations should be a mix of places the player has visited and places that have been mentioned but not yet explored.
+            For each location, provide a name, a brief description, and x/y coordinates for a map.
+
+            Story:
+            ${storyHistory}
+        `;
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: mapGenSchema,
+                safetySettings: safetySettings,
+            },
+        });
+
+        const data = JSON.parse(response.text);
+        const mapImage = await generateImage(`A fantasy world map for a story about ${gameState.storyGuidance.plot}.`);
+
+        const newLocations: MapLocation[] = data.locations.map((loc: any) => ({
+            ...loc,
+            visited: gameState.storyLog.some(segment => segment.text.includes(loc.name))
+        }));
+
+        setGameState(prevState => ({
+            ...prevState,
+            map: {
+                backgroundImage: mapImage,
+                locations: newLocations
+            }
+        }));
+
+    } catch (error) {
+        console.error("Map sync failed:", error);
+    } finally {
+        setApiIsLoading(false);
+    }
+  }, [gameState, generateImage]);
+
+
   const handleSyncHp = () => {
         setGameState(g => {
             if (!g.character || g.character.name !== "Cinderblaze") return g;
@@ -1947,58 +2046,6 @@ const App = () => {
     });
   };
 
-  const handleSyncMap = useCallback(async () => {
-        if (!gameState.character || !gameState.storyGuidance || !gameState.storyLog) return;
-        setApiIsLoading(true);
-
-        try {
-            const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
-            const prompt = `
-                Based on the following story, generate a list of 5-7 key locations.
-                These locations should be a mix of places the player has visited and places that have been mentioned but not yet explored.
-                For each location, provide a name, a brief description, and x/y coordinates for a map.
-
-                Story:
-                ${storyHistory}
-            `;
-
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: mapGenSchema,
-                    safetySettings: safetySettings,
-                },
-            });
-
-            const data = JSON.parse(response.text);
-            const mapImage = await generateImage(`A fantasy world map for a story about ${gameState.storyGuidance.plot}.`);
-
-            const newLocations: MapLocation[] = data.locations.map((loc: any) => ({
-                ...loc,
-                visited: gameState.storyLog.some(segment => segment.text.includes(loc.name))
-            }));
-
-            setGameState(prevState => ({
-                ...prevState,
-                map: {
-                    backgroundImage: mapImage,
-                    locations: newLocations
-                }
-            }));
-
-        } catch (error) {
-            console.error("Map sync failed:", error);
-        } finally {
-            setApiIsLoading(false);
-        }
-  }, [gameState, generateImage]);
-  
-  useEffect(() => {
-    (window as any).syncMap = handleSyncMap;
-  }, [handleSyncMap]);
-
   useEffect(() => {
     const handleForceActions = () => {
       console.log("Force combat actions command received.");
@@ -2017,11 +2064,13 @@ const App = () => {
     };
 
     window.addEventListener('force-combat-actions', handleForceActions);
+    (window as any).syncMap = handleSyncMap;
+
 
     return () => {
       window.removeEventListener('force-combat-actions', handleForceActions);
     };
-  }, []); // The empty dependency array means this runs only once
+  }, [handleSyncMap]); // The empty dependency array means this runs only once
 
   const renderContent = () => {
     switch (gameState.gameStatus) {
