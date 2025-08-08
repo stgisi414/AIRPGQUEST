@@ -835,13 +835,14 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                             Sync Gold & Loot
                         </button>
                     )}
-                     --- END DEBUG BUTTON --- */}
-
                     {character.name === "Cinderblaze" && (
                         <button onClick={onSyncMap} className="level-up-btn" style={{backgroundColor: '#9b59b6', marginTop: '0.5rem'}}>
                             Sync Map
                         </button>
                     )}
+                     --- END DEBUG BUTTON --- */}
+
+                    
 
                     <h3>Skills</h3>
                     <ul className="skills-list">
