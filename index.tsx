@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, FormEvent } from "react";
+import React, { useState, useEffect, useCallback, useRef, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import './game.css';
 
 const safetySettings = [
@@ -184,7 +184,30 @@ interface Alignment {
     goodness: number;  // -100 (Evil) to 100 (Good)
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const PROXY_URLS = {
+    gemini: "https://us-central1-airpgquest.cloudfunctions.net/geminiProxy",
+    imagen: "https://us-central1-airpgquest.cloudfunctions.net/imagenProxy" 
+};
+
+const callGemini = async (model: string, contents: any, config: any) => {
+    const response = await fetch(PROXY_URLS.gemini, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, contents, config })
+    });
+    if (!response.ok) throw new Error('Gemini Proxy Failed');
+    return await response.json();
+};
+
+const callImagen = async (model: string, prompt: string, config: any) => {
+    const response = await fetch(PROXY_URLS.imagen, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, prompt, config })
+    });
+    if (!response.ok) throw new Error('Imagen Proxy Failed');
+    return await response.json();
+};
 
 // --- API SCHEMAS ---
 const characterGenSchema = {
@@ -1243,32 +1266,47 @@ const App = () => {
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
 
+  // Add a ref to track if the game has already initialized to prevent strict-mode double firing
+  const hasLoaded = useRef(false);
+
   const generateImage = useCallback(async (prompt: string): Promise<string | null> => {
     try {
-        // Step 1: Generate a sanitized prompt with Gemini
-        const promptGenerationResponse = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `Based on the following description, create a concise, sanitized, and effective image generation prompt suitable for a fantasy art style. Focus on the key visual elements. Description: "${prompt}"`,
-            config: {
+        // Step 1: Sanitize prompt via Gemini Proxy
+        const promptGenerationResponse = await callGemini(
+            "gemini-2.5-flash",
+            `Based on the following description, create a concise, sanitized, and effective image generation prompt suitable for a fantasy art style. Focus on the key visual elements. Description: "${prompt}"`,
+            {
                 responseMimeType: "application/json",
                 responseSchema: imagePromptSchema,
                 safetySettings: safetySettings,
-            },
-        });
-        const sanitizedData = JSON.parse(promptGenerationResponse.text);
+            }
+        );
+        // Note: The structure of the response might be slightly different depending on how SDK serializes it.
+        // Usually, response.text is a function in the SDK, but coming from JSON it might be a property or inside candidates.
+        // We handle the text extraction safely:
+        let jsonText = "";
+        if (promptGenerationResponse.text) {
+             jsonText = promptGenerationResponse.text;
+        } else if (promptGenerationResponse.candidates && promptGenerationResponse.candidates[0].content.parts[0].text) {
+             jsonText = promptGenerationResponse.candidates[0].content.parts[0].text;
+        }
+
+        const sanitizedData = JSON.parse(jsonText);
         const finalPrompt = sanitizedData.prompt;
 
-        // Step 2: Use the sanitized prompt to generate the image
-        const imageResponse = await ai.models.generateImages({
-            model: 'imagen-3.0-generate-002',
-            prompt: `fantasy art, digital painting. ${finalPrompt}`,
-            config: {
+        // Step 2: Generate Image via Imagen Proxy
+        const imageResponse = await callImagen(
+            'imagen-3.0-generate-002',
+            `fantasy art, digital painting. ${finalPrompt}`,
+            {
                 numberOfImages: 1,
                 outputMimeType: 'image/jpeg',
                 aspectRatio: '16:9',
                 safetySettings: safetySettings,
-            },
-        });
+            }
+        );
+
+        // Extract image bytes from the serialized response
         const base64ImageBytes = imageResponse.generatedImages[0].image.imageBytes;
         return `data:image/jpeg;base64,${base64ImageBytes}`;
     } catch (error) {
@@ -1298,15 +1336,30 @@ const App = () => {
       }));
   }, [setGameState, setCreationData]); // Add dependencies
 
-  // Load from localStorage on startup
+  // Updated Load Logic: Prevents double-execution and redundant regeneration
   useEffect(() => {
     const loadGame = async () => {
+      // Prevent double-loading in Strict Mode
+      if (hasLoaded.current) return;
+      hasLoaded.current = true;
+
       try {
         const savedStateJSON = localStorage.getItem('endlessAdventureSave');
         if (savedStateJSON) {
           const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
 
+          // Only regenerate portrait if absolutely missing (it should now be saved)
           if (savedGameState.character) {
+              if (!savedGameState.character.portrait) {
+                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+              }
+              if (!savedGameState.character.maxHp) {
+                  savedGameState.character.maxHp = 100;
+              }
+          }
+
+          // Only regenerate map if absolutely missing
+          if (savedGameState.character && !savedGameState.map) {
               // Regenerate character portrait on load if it's missing
               if (!savedGameState.character.portrait) {
                   savedGameState.character.portrait = await generateImage(savedGameState.character.description);
@@ -1333,13 +1386,10 @@ const App = () => {
                   locations: [startingLocation]
               };
           } else if (savedGameState.map && !savedGameState.map.backgroundImage) {
-              // Regenerate map image if it's missing but the map object exists
               savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
           }
-          // --- END FIX ---
 
-
-          // Regenerate the last story illustration if it's missing
+          // Only regenerate illustration if missing AND we are actively playing
           if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
               const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
               if (!lastSegment.illustration) {
@@ -1347,7 +1397,6 @@ const App = () => {
               }
           }
 
-          // IMPORTANT: Merge with defaults to prevent errors from old saves
           setGameState(prevState => ({
               ...prevState,
               ...savedGameState
@@ -1358,37 +1407,53 @@ const App = () => {
           }
 
         } else {
-          // If there's no save file, start a new game.
           handleNewGame();
         }
       } catch (error) {
-        console.error("Failed to load or parse saved state, starting new game:", error);
-        // If the save file is corrupted, start a new game.
+        console.error("Failed to load save:", error);
         handleNewGame();
       }
     };
 
     loadGame();
-    // This useEffect should ONLY run once on startup.
-}, [generateImage, handleNewGame]);
+  }, [generateImage, handleNewGame]);
 
-  // Save to localStorage on change
+  // Updated Save Logic: Tries to persist images to save costs
   useEffect(() => {
     if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
-      const stateToSave = {
-        ...gameState,
-        character: gameState.character
-          ? { ...gameState.character, portrait: null }
-          : null,
-        storyLog: gameState.storyLog.map((segment, index) => {
-          if (index === gameState.storyLog.length - 1) {
-            return segment;
+      const saveState = (includeImages: boolean) => {
+          const stateToSave = {
+            ...gameState,
+            // Try to keep the portrait if includeImages is true
+            character: gameState.character
+              ? { ...gameState.character, portrait: includeImages ? gameState.character.portrait : null }
+              : null,
+            storyLog: gameState.storyLog.map((segment, index) => {
+              // Keep the last illustration if includeImages is true
+              if (index === gameState.storyLog.length - 1) {
+                return includeImages ? segment : { ...segment, illustration: null };
+              }
+              return { ...segment, illustration: null };
+            }),
+            // Try to keep the map background if includeImages is true
+            map: gameState.map ? { ...gameState.map, backgroundImage: includeImages ? gameState.map.backgroundImage : null } : null
+          };
+          
+          try {
+            localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
+          } catch (e) {
+            // If we hit the 5MB limit, fallback to stripping images to ensure progress is saved
+            if (includeImages) {
+                console.warn("Save quota exceeded. Removing images from save file.");
+                saveState(false);
+            } else {
+                console.error("Failed to save game even without images:", e);
+            }
           }
-          return { ...segment, illustration: null };
-        }),
-        map: gameState.map ? { ...gameState.map, backgroundImage: null } : null
       };
-      localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
+
+      // Attempt to save WITH images first
+      saveState(true);
     }
   }, [gameState, creationData]);
 
@@ -1416,17 +1481,23 @@ const App = () => {
             Generate a set of starting equipment for the character and their companions, making it unique and appropriate.
             IMPORTANT: For the companions, please generate unique names and personalities. Avoid using the names Kaelen, Lyra, Elara, and Gorok.
         `;
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            prompt,
+            {
                 responseMimeType: "application/json",
                 responseSchema: characterGenSchema,
                 safetySettings: safetySettings,
             },
-        });
+        );
 
-        const data = JSON.parse(response.text);
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text);
+        } else {
+            // Fallback for serialized JSON response structure
+            data = JSON.parse(response.candidates[0].content.parts[0].text);
+        }
 
         const initialCompanions: Companion[] = data.companions.map((comp: any) => {
             // Transform the skills array from the API into a key-value object
@@ -1535,7 +1606,8 @@ const App = () => {
   }, [creationData, generateImage, handleNewGame]);
 
   const handleAction = useCallback(async (action: string) => {
-    if (!gameState.character || !gameState.storyGuidance) return;
+    // Guard clause: Prevent spamming action button
+    if (!gameState.character || !gameState.storyGuidance || apiIsLoading) return;
     setApiIsLoading(true);
 
     try {
@@ -1591,17 +1663,23 @@ const App = () => {
             If the action leads to a transaction with a merchant, set 'initiateTransaction' to true and provide the vendor's details and inventory.
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            prompt,
+            {
                 responseMimeType: "application/json",
                 responseSchema: nextStepSchema,
                 safetySettings: safetySettings,
             },
-        });
+        );
 
-        const data = JSON.parse(response.text).story;
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text).story;
+        } else {
+            // Fallback for serialized JSON response structure
+            data = JSON.parse(response.candidates[0].content.parts[0].text).story;
+        }
         if (data.initiateCombat && data.enemies && data.enemies.length > 0) {
             const enemyPortraits = await Promise.all(
                 data.enemies.map((enemy: any) => generateImage(enemy.description))
@@ -1800,17 +1878,23 @@ const App = () => {
                 Generate the new, complete summary.
             `;
 
-            const summaryResponse = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: summaryPrompt,
-                config: {
+            const summaryResponse = await callGemini(
+                "gemini-2.5-flash",
+                summaryPrompt,
+                {
                     responseMimeType: "application/json",
                     responseSchema: storySummarySchema,
                     safetySettings: safetySettings
                 },
-            });
+            );
 
-            const summaryData = JSON.parse(summaryResponse.text);
+            let summaryData;
+            if (summaryResponse.text && typeof summaryResponse.text === 'string') {
+                summaryData = JSON.parse(summaryResponse.text);
+            } else {
+                // Fallback for serialized JSON response structure
+                summaryData = JSON.parse(summaryResponse.candidates[0].content.parts[0].text);
+            }
 
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
@@ -1829,10 +1913,11 @@ const App = () => {
     } finally {
         setApiIsLoading(false);
     }
-}, [gameState, generateImage]);
+}, [gameState, generateImage, apiIsLoading]);
 
   const handleCombatAction = useCallback(async (action: string) => {
-    if (!gameState.character || !gameState.combat) return;
+    // Guard clause: Prevent spamming combat button
+    if (!gameState.character || !gameState.combat || apiIsLoading) return;
     setApiIsLoading(true);
 
     try {
@@ -1865,17 +1950,23 @@ const App = () => {
             - IMPORTANT: Determine if the combat is over ONLY if the player is defeated. Do NOT set combatOver to true if only the enemies are defeated; the game client will handle that check.
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: initialPrompt,
-            config: {
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            initialPrompt,
+            {
                 responseMimeType: "application/json",
                 responseSchema: combatActionSchema,
                 safetySettings: safetySettings,
             },
-        });
+        );
 
-        const data = JSON.parse(response.text).combatResult;
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text).combatResult;
+        } else {
+            // Fallback for serialized JSON response structure
+            data = JSON.parse(response.candidates[0].content.parts[0].text).combatResult;
+        }
 
         // --- Client-Side Victory Check ---
         const newEnemies = [...gameState.combat.enemies];
@@ -1904,12 +1995,19 @@ const App = () => {
                 - "loot": An object containing "gold" and a list of "items" the player found.
                 - Set "log", "playerHpChange", "enemyHpChanges", and "availableActions" to empty or placeholder values (e.g., [], 0).
             `;
-            const victoryResponse = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: victoryPrompt,
-                config: { responseMimeType: "application/json", responseSchema: combatActionSchema, safetySettings: safetySettings },
-            });
-            const victoryData = JSON.parse(victoryResponse.text).combatResult;
+            const victoryResponse = await callGemini(
+                "gemini-2.5-flash",
+                victoryPrompt,
+                { responseMimeType: "application/json", responseSchema: combatActionSchema, safetySettings: safetySettings }
+            );
+
+            let victoryData;
+            if (victoryResponse.text && typeof victoryResponse.text === 'string') {
+                victoryData = JSON.parse(victoryResponse.text).combatResult;
+            } else {
+                // Fallback for serialized JSON response structure
+                victoryData = JSON.parse(victoryResponse.candidates[0].content.parts[0].text).combatResult;
+            }
             const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${victoryData.victoryText}`);
             const victorySegment: StorySegment = { text: victoryData.victoryText || "You are victorious!", illustration: victoryIllustration };
 
@@ -1951,7 +2049,7 @@ const App = () => {
     } finally {
         setApiIsLoading(false);
     }
-}, [gameState, generateImage]);
+}, [gameState, generateImage, apiIsLoading]);
 
   const handleLootContinue = () => {
     // This now just transitions the state, the story log is updated in handleCombatAction
@@ -2046,17 +2144,23 @@ const App = () => {
             ${storyHistory}
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            prompt,
+            {
                 responseMimeType: "application/json",
                 responseSchema: mapGenSchema,
                 safetySettings: safetySettings,
-            },
-        });
+            }
+        );
 
-        const data = JSON.parse(response.text);
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text);
+        } else {
+            // Fallback for serialized JSON response structure
+            data = JSON.parse(response.candidates[0].content.parts[0].text);
+        }
         const mapImage = await generateImage(`A fantasy world map for a story about ${gameState.storyGuidance.plot}.`);
 
         const newLocations: MapLocation[] = data.locations.map((loc: any) => ({
@@ -2104,17 +2208,23 @@ const App = () => {
             ---
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            prompt,
+            {
                 responseMimeType: "application/json",
                 responseSchema: alignmentSyncSchema,
                 safetySettings: safetySettings,
-            },
-        });
+            }
+        );
 
-        const data = JSON.parse(response.text);
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text);
+        } else {
+            // Fallback for serialized JSON response structure
+            data = JSON.parse(response.candidates[0].content.parts[0].text);
+        }
 
         setGameState(prevState => {
             if (!prevState.character) return prevState;
