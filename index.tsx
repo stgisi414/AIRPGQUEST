@@ -2,6 +2,67 @@ import React, { useState, useEffect, useCallback, useRef, FormEvent } from "reac
 import { createRoot } from "react-dom/client";
 import { Type } from "@google/genai";
 import './game.css';
+import { initializeApp } from "firebase/app";
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  User 
+} from "firebase/auth";
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  onSnapshot, 
+  collection, 
+  addDoc, 
+  updateDoc,
+  arrayUnion,
+  serverTimestamp,
+  Timestamp
+} from "firebase/firestore";
+import { 
+  getStorage, 
+  ref, 
+  uploadString, 
+  getDownloadURL 
+} from "firebase/storage";
+
+// REPLACE WITH YOUR FIREBASE CONFIG
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+const googleProvider = new GoogleAuthProvider();
+
+// --- HELPER FUNCTION (MUST BE HERE, OUTSIDE APP) ---
+const uploadImageToStorage = async (base64Data: string, path: string): Promise<string> => {
+    if (!base64Data || !base64Data.startsWith('data:image')) return base64Data;
+    
+    try {
+        const storageRef = ref(storage, path);
+        await uploadString(storageRef, base64Data, 'data_url');
+        return await getDownloadURL(storageRef);
+    } catch (error) {
+        console.error("Upload failed:", error);
+        // Important: If upload fails (e.g. permissions), we return the base64.
+        // This causes the Firestore "Document too large" error, which is expected
+        // until permissions are fixed in Step 1.
+        return base64Data; 
+    }
+};
 
 const safetySettings = [
     {
@@ -109,6 +170,25 @@ interface CreationData {
         locations: Omit<MapLocation, 'visited'>[];
         startingLocationName: string;
     };
+}
+
+interface Player {
+    uid: string;
+    displayName: string;
+    characterName?: string;
+    isHost: boolean;
+    isReady: boolean;
+}
+
+interface MultiplayerLobby {
+    id: string;
+    hostUid: string;
+    name: string;
+    players: Player[];
+    status: 'waiting' | 'playing' | 'finished';
+    currentTurnIndex: number;
+    turnDeadline: Timestamp;
+    gameState: GameState; // The shared game state
 }
 
 // Data from initial creation form
@@ -238,14 +318,6 @@ const characterGenSchema = {
             required: ['lawfulness', 'goodness']
           },
           personality: { type: Type.STRING },
-          alignment: {
-            type: Type.OBJECT,
-            properties: {
-                lawfulness: { type: Type.INTEGER },
-                goodness: { type: Type.INTEGER }
-            },
-            required: ['lawfulness', 'goodness']
-          },
           skills: {
             type: Type.ARRAY,
             description: "An array of objects, where each object represents a skill and its level.",
@@ -865,7 +937,7 @@ const MapPanel = ({ mapState, onLocationClick, isLoading }: { mapState: MapState
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap, getAlignmentDescriptor, onOpenGambling }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void, getAlignmentDescriptor: (alignment: Alignment) => string, onOpenGambling: () => void }) => {
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap, getAlignmentDescriptor, onOpenGambling, isMyTurn }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void, getAlignmentDescriptor: (alignment: Alignment) => string, onOpenGambling: () => void, isMyTurn: boolean }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
@@ -1070,11 +1142,16 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                         </div>
                         <div className="actions-panel">
                             {currentActions.map(action => (
-                                <button key={action} onClick={() => onAction(action)} disabled={isLoading}>
+                                <button 
+                                    key={action} 
+                                    onClick={() => onAction(action)} 
+                                    disabled={isLoading || !isMyTurn} // <--- Disable if not my turn
+                                    style={{ opacity: isMyTurn ? 1 : 0.5 }} // Visual cue
+                                >
                                     {action}
                                 </button>
                             ))}
-                            <button onClick={onCustomActionClick} disabled={isLoading} className="custom-action-btn">
+                            <button onClick={onCustomActionClick} disabled={isLoading || !isMyTurn} style={{ opacity: isMyTurn ? 1 : 0.5 }} className="custom-action-btn">
                                 Custom Action...
                             </button>
                         </div>
@@ -1477,27 +1554,319 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
     );
 };
 
+const AuthScreen = ({ onLogin }: { onLogin: () => void }) => (
+    <div className="auth-container">
+        <h1><img src="/ea-logo.png" style={{height: '3rem', verticalAlign: 'middle'}}/> Endless Adventure</h1>
+        <p>Sign in to save your progress to the cloud and play with friends.</p>
+        <button onClick={onLogin} className="google-btn">
+            Sign in with Google
+        </button>
+    </div>
+);
+
+const LobbyBrowser = ({ 
+    onJoin, 
+    onCreate, 
+    onSinglePlayer 
+}: { 
+    onJoin: (lobbyId: string) => void, 
+    onCreate: () => void, 
+    onSinglePlayer: () => void 
+}) => {
+    const [lobbies, setLobbies] = useState<any[]>([]);
+
+    // In a real app, you'd use a Firestore query here to fetch 'waiting' lobbies
+    // For now, we'll assume a simple create/single flow
+    
+    return (
+        <div className="lobby-container">
+            <h1>Campaign Selection</h1>
+            <div className="lobby-list">
+                <div className="lobby-item">
+                    <div>
+                        <h3>Single Player</h3>
+                        <p>Embark on a solo journey.</p>
+                    </div>
+                    <button onClick={onSinglePlayer}>Play Solo</button>
+                </div>
+                
+                <div className="lobby-item">
+                    <div>
+                        <h3>Multiplayer Campaign</h3>
+                        <p>Create a room and invite adventurers.</p>
+                    </div>
+                    <button onClick={onCreate}>Create Room</button>
+                </div>
+                
+                {/* List existing lobbies here if implementing a browser */}
+            </div>
+        </div>
+    );
+};
+
+const WaitingRoom = ({ lobby, onStart }: { lobby: MultiplayerLobby, onStart: () => void }) => (
+    <div className="lobby-container">
+        <h2>Lobby: {lobby.name}</h2>
+        <p>Share ID to join: <strong>{lobby.id}</strong></p>
+        
+        <div className="player-list">
+            {lobby.players.map(p => (
+                <div key={p.uid} className="player-chip">
+                    {p.displayName} {p.isHost ? '👑' : ''}
+                </div>
+            ))}
+        </div>
+
+        {lobby.players.find(p => p.isHost)?.uid === auth.currentUser?.uid && (
+            <button onClick={onStart} disabled={lobby.players.length < 1}>
+                Start Adventure
+            </button>
+        )}
+        <p className="skill-points-counter">Waiting for host to start...</p>
+    </div>
+);
+
 // --- MAIN APP ---
 
 const App = () => {
+  // 1. ALL STATE DEFINITIONS FIRST
+  const [user, setUser] = useState<User | null>(null);
+  const [lobbyId, setLobbyId] = useState<string | null>(null);
+  const [isMultiplayer, setIsMultiplayer] = useState(false);
+  const [lobbyData, setLobbyData] = useState<MultiplayerLobby | null>(null);
   const [gameState, setGameState] = useState<GameState>({
-    character: null,
-    companions: [],
-    storyLog: [],
-    currentActions: [],
-    storyGuidance: null,
-    skillPools: null,
-    gameStatus: 'initial_load',
-    weather: 'Clear Skies',
-    timeOfDay: 'Morning',
-    combat: null,
-    loot: null,
-    transaction: null,
-    map: null,
+      character: null,
+      companions: [],
+      storyLog: [],
+      currentActions: [],
+      storyGuidance: null,
+      skillPools: null,
+      gameStatus: 'initial_load',
+      weather: 'Clear Skies',
+      timeOfDay: 'Morning',
+      combat: null,
+      loot: null,
+      transaction: null,
+      map: null,
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
+
+  // 2. REFS (Move this up from the bottom)
+  const hasLoaded = useRef(false);
+
+  // Add this inside App component
+  const migrateLocalSaveToCloud = async (uid: string) => {
+    const localSave = localStorage.getItem('endlessAdventureSave');
+    if (!localSave) return; 
+
+    try {
+        console.log("Starting migration... extracting images...");
+        const parsedSave = JSON.parse(localSave);
+        let { gameState: localState, creationData: localCreation } = parsedSave;
+        
+        // 1. Upload Character Portrait
+        if (localState.character?.portrait?.startsWith('data:')) {
+            const url = await uploadImageToStorage(localState.character.portrait, `users/${uid}/portrait_${Date.now()}.jpg`);
+            localState.character.portrait = url;
+        }
+
+        // 2. Upload Map Background
+        if (localState.map?.backgroundImage?.startsWith('data:')) {
+            const url = await uploadImageToStorage(localState.map.backgroundImage, `users/${uid}/map_${Date.now()}.jpg`);
+            localState.map.backgroundImage = url;
+        }
+
+        // 3. Upload Story Illustrations (This is usually the biggest part)
+        if (localState.storyLog) {
+            const newStoryLog = await Promise.all(localState.storyLog.map(async (segment: any, index: number) => {
+                if (segment.illustration?.startsWith('data:')) {
+                    const url = await uploadImageToStorage(segment.illustration, `users/${uid}/story_${index}_${Date.now()}.jpg`);
+                    return { ...segment, illustration: url };
+                }
+                return segment;
+            }));
+            localState.storyLog = newStoryLog;
+        }
+
+        const userGameRef = doc(db, "users", uid, "games", "singleplayer");
+        const docSnap = await getDoc(userGameRef);
+        
+        if (!docSnap.exists()) {
+            // Now saving the 'lightweight' version with URLs instead of raw image data
+            await setDoc(userGameRef, {
+                gameState: localState,
+                creationData: localCreation,
+                lastUpdated: serverTimestamp()
+            });
+            console.log("Successfully migrated local save to cloud!");
+            // Optional: Clear local storage after successful migration
+            // localStorage.removeItem('endlessAdventureSave'); 
+        }
+    } catch (e) {
+        console.error("Migration failed:", e);
+    }
+  };
+
+  // 1. Auth Listener
+  useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+            setUser(currentUser);
+            if (currentUser) {
+                // 1. Try to migrate existing local data first
+                await migrateLocalSaveToCloud(currentUser.uid);
+                // 2. Then load the game (which will now find the migrated data)
+                loadCloudGame(currentUser.uid); 
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+  // 2. UPDATE THIS: Update your lobby listener to save the data
+  useEffect(() => {
+      if (!lobbyId) return;
+      const unsub = onSnapshot(doc(db, "lobbies", lobbyId), (doc) => {
+          if (doc.exists()) {
+              const data = doc.data() as MultiplayerLobby;
+              setLobbyData(data); // <--- Save this!
+              
+              if (data.gameState) {
+                  setGameState(data.gameState);
+              }
+              if (data.status === 'playing' && gameState.gameStatus === 'initial_load') {
+                  setGameState(prev => ({ ...prev, gameStatus: 'playing' }));
+              }
+          }
+      });
+      return () => unsub();
+  }, [lobbyId]);
+
+  const handleLogin = async () => {
+      try {
+          await signInWithPopup(auth, googleProvider);
+      } catch (error) {
+          console.error("Login failed", error);
+      }
+  };
+
+  // Replace old load logic with Firestore logic
+  const loadCloudGame = async (uid: string) => {
+      const docRef = doc(db, "users", uid, "games", "singleplayer");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+          const savedData = docSnap.data();
+          setGameState(savedData.gameState);
+          setCreationData(savedData.creationData);
+      } else {
+          handleNewGame();
+      }
+  };
+
+  // Replace old save logic with Firestore logic
+  // Call this inside your existing useEffect or where appropriate
+  const saveGameToCloud = async (stateToSave: any) => {
+      if (!user) return;
+      
+      if (isMultiplayer && lobbyId) {
+          // In multiplayer, only the "active" player or host writes mostly, 
+          // but usually we update the whole lobby doc.
+          await updateDoc(doc(db, "lobbies", lobbyId), {
+              gameState: stateToSave
+          });
+      } else {
+          // Single player save
+          await setDoc(doc(db, "users", user.uid, "games", "singleplayer"), {
+              gameState: stateToSave,
+              creationData: creationData,
+              lastUpdated: serverTimestamp()
+          });
+      }
+  };
+
+  // --- NEW: The Auto-Save Hook ---
+  // Triggers whenever gameState changes (except during loading/initial)
+  useEffect(() => {
+      if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading' && user) {
+          const timeoutId = setTimeout(() => {
+              saveGameToCloud(gameState);
+          }, 1000); // Debounce save by 1s
+          return () => clearTimeout(timeoutId);
+      }
+  }, [gameState, user, isMultiplayer, lobbyId]);
+
+  const handleCreateLobby = async () => {
+      if (!user) return;
+      const newLobby: any = {
+          hostUid: user.uid,
+          name: `${user.displayName}'s Adventure`,
+          players: [{
+              uid: user.uid,
+              displayName: user.displayName || "Hero",
+              isHost: true,
+              isReady: true
+          }],
+          status: 'waiting',
+          currentTurnIndex: 0,
+          createdAt: serverTimestamp()
+      };
+      
+      const docRef = await addDoc(collection(db, "lobbies"), newLobby);
+      setLobbyId(docRef.id);
+      setIsMultiplayer(true);
+      setGameState(prev => ({ ...prev, gameStatus: 'initial_load' })); // Using initial_load as 'waiting' state here
+  };
+
+  // UPDATE this function in App component
+  const handleActionWrapper = async (action: string) => {
+        if (isMultiplayer && lobbyId && lobbyData) {
+            const currentPlayerIndex = lobbyData.currentTurnIndex % lobbyData.players.length;
+            const currentPlayer = lobbyData.players[currentPlayerIndex];
+
+            // BLOCK ACTION if it's not your turn
+            if (currentPlayer.uid !== user?.uid) {
+                alert(`It is ${currentPlayer.displayName}'s turn!`);
+                return;
+            }
+
+            // OPTIMISTIC UPDATE: Advance turn immediately locally so UI feels responsive
+            // The real AI response will overwrite this later
+            const nextTurnIndex = lobbyData.currentTurnIndex + 1;
+            await updateDoc(doc(db, "lobbies", lobbyId), {
+                currentTurnIndex: nextTurnIndex
+            });
+        }
+        
+        // Proceed with the AI action generation
+        await handleAction(action);
+    };
+
+  // --- Render Logic Updates ---
+
+  if (!user) {
+      return <AuthScreen onLogin={handleLogin} />;
+  }
+
+  if (!gameState.character && !creationData && !lobbyId && gameState.gameStatus === 'initial_load') {
+      return <LobbyBrowser 
+          onSinglePlayer={() => { setIsMultiplayer(false); handleNewGame(); }}
+          onCreate={handleCreateLobby} 
+          onJoin={(id) => { setLobbyId(id); setIsMultiplayer(true); }} 
+      />;
+  }
+
+  // --- UPDATED: Render the actual Waiting Room Component ---
+  if (isMultiplayer && lobbyId && gameState.gameStatus === 'initial_load') {
+      if (!lobbyData) return <div className="lobby-container"><Loader text="Connecting to lobby..." /></div>;
+      
+      return <WaitingRoom 
+          lobby={lobbyData} 
+          onStart={async () => {
+              // Host starts the game
+              await updateDoc(doc(db, "lobbies", lobbyId), { status: 'playing' });
+          }} 
+      />;
+  }
 
   const handleUpdateGold = (amount: number) => {
     setGameState(prev => {
@@ -1570,9 +1939,16 @@ const handleAddGamblingItem = (item: Equipment) => {
             return null;
         }
 
-        // Extract image bytes from the serialized response
-        const base64ImageBytes = imageResponse.generatedImages[0].image.imageBytes;
-        return `data:image/jpeg;base64,${base64ImageBytes}`;
+        const base64Image = `data:image/jpeg;base64,${imageResponse.generatedImages[0].image.imageBytes}`;
+        
+        // 3. Upload to Firebase Storage immediately
+        if (auth.currentUser) {
+            const filename = `generated_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+            const path = `users/${auth.currentUser.uid}/generated/${filename}`;
+            return await uploadImageToStorage(base64Image, path);
+        }
+
+        return base64Image; // Fallback if not logged in (shouldn't happen in game)
     } catch (error) {
         console.error("Image generation failed:", error);
         return null;
@@ -2619,6 +2995,11 @@ const handleAddGamblingItem = (item: Equipment) => {
         return descriptor.trim();
   };
 
+  // 3. ADD THIS: Calculate the turn boolean
+  // It is your turn if: Multiplayer is OFF OR (Lobby exists AND current player ID matches yours)
+  const isMyTurn = !isMultiplayer || (!!lobbyData && !!user && lobbyData.players[lobbyData.currentTurnIndex % lobbyData.players.length]?.uid === user.uid);
+
+  // 4. UPDATE THIS: Pass the prop in renderContent
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'gambling':
@@ -2632,18 +3013,20 @@ const handleAddGamblingItem = (item: Equipment) => {
         />;
       case 'playing':
         return <GameScreen
-                    gameState={gameState}
-                    onAction={handleAction}
-                    onNewGame={handleNewGame}
-                    onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
-                    isLoading={apiIsLoading}
-                    onCustomActionClick={() => setIsCustomActionModalOpen(true)}
-                    onSyncHp={handleSyncHp}
-                    onSyncGoldAndLoot={handleSyncGoldAndLoot}
-                    onSyncMap={handleSyncMap}
-                    getAlignmentDescriptor={getAlignmentDescriptor}
-                    onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))}
-                />;
+            gameState={gameState}
+            // Use handleActionWrapper for multiplayer turn logic
+            onAction={handleActionWrapper} 
+            onNewGame={handleNewGame}
+            onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
+            isLoading={apiIsLoading}
+            onCustomActionClick={() => setIsCustomActionModalOpen(true)}
+            onSyncHp={handleSyncHp}
+            onSyncGoldAndLoot={handleSyncGoldAndLoot}
+            onSyncMap={handleSyncMap}
+            getAlignmentDescriptor={getAlignmentDescriptor}
+            onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))}
+            isMyTurn={isMyTurn} 
+        />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;
       case 'characterCustomize':
@@ -2654,7 +3037,7 @@ const handleAddGamblingItem = (item: Equipment) => {
                     availablePoints={creationData.startingSkillPoints}
                     onComplete={handleFinalizeCharacter}
                     completeButtonText="Finalize Character & Begin"
-                />
+                />;
       case 'levelUp':
         if (!gameState.character || !gameState.skillPools) return <Loader text="Loading..."/>;
         return <SkillAllocator
@@ -2665,7 +3048,7 @@ const handleAddGamblingItem = (item: Equipment) => {
                     onComplete={handleLevelUpComplete}
                     onCancel={() => setGameState(g => ({...g, gameStatus: 'playing'}))}
                     completeButtonText="Confirm Skills"
-                />
+                />;
       case 'combat':
           return <CombatScreen gameState={gameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} onSyncHp={handleSyncHp} />;
       case 'looting':
@@ -2685,15 +3068,20 @@ const handleAddGamblingItem = (item: Equipment) => {
 
   return (
     <div id="app-container">
+        {isMultiplayer && (
+            <div className="turn-indicator">
+                Multiplayer Session | {lobbyId}
+            </div>
+        )}
         {renderContent()}
         <CustomActionModal
             isOpen={isCustomActionModalOpen}
             onClose={() => setIsCustomActionModalOpen(false)}
-            onSubmit={handleCustomActionSubmit}
+            onSubmit={(action) => { setIsCustomActionModalOpen(false); handleActionWrapper(action); }}
             isLoading={apiIsLoading}
         />
     </div>
-    );
+  );
 };
 
 const container = document.getElementById('root');
