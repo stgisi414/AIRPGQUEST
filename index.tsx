@@ -704,6 +704,14 @@ const CharacterCreationScreen = ({ onCreate, isLoading }: { onCreate: (details: 
 
   return (
     <div className="creation-container">
+      <video 
+        className="welcome-video" 
+        src="/ea-video.mp4" 
+        autoPlay 
+        loop 
+        muted 
+        playsInline 
+      />
       <h1><img src="/ea-logo.png" />&nbsp;Endless Adventure</h1>
       <p>Welcome, traveler. A new world of adventure awaits. Define your hero, and the saga will begin.</p>
       <form onSubmit={handleSubmit} className="creation-form">
@@ -857,7 +865,7 @@ const MapPanel = ({ mapState, onLocationClick, isLoading }: { mapState: MapState
     );
 };
 
-const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap, getAlignmentDescriptor }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void, getAlignmentDescriptor: (alignment: Alignment) => string }) => {
+const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCustomActionClick, onSyncHp, onSyncGoldAndLoot, onSyncMap, getAlignmentDescriptor, onOpenGambling }: { gameState: GameState, onAction: (action: string) => void, onNewGame: () => void, onLevelUp: () => void, isLoading: boolean, onCustomActionClick: () => void, onSyncHp: () => void, onSyncGoldAndLoot: () => void, onSyncMap: () => void, getAlignmentDescriptor: (alignment: Alignment) => string, onOpenGambling: () => void }) => {
     const [isSpeaking, setIsSpeaking] = useState(false);
 
     if (!gameState.character || gameState.storyLog.length === 0) {
@@ -916,11 +924,19 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
         <div className="game-container">
             <header className="game-header">
                 <h1><img src="/ea-logo.png" />&nbsp;Endless Adventure</h1>
-                <button onClick={onNewGame} className="new-game-btn">Start New Game</button>
+                <div>
+                    {/* [ADD THIS BUTTON] */}
+                    <button onClick={onOpenGambling} style={{marginRight: '1rem', borderColor: '#f1c40f', color: '#f1c40f'}}>🎲 Casino</button>
+                    <button onClick={onNewGame} className="new-game-btn">Start New Game</button>
+                </div>
             </header>
             <main className="game-main">
                 <div className="character-panel">
-                    <img src={character.portrait || ''} alt={`${character.name}'s portrait`} className="character-portrait" />
+                    {character.portrait ? (
+                        <img src={character.portrait} alt={`${character.name}'s portrait`} className="character-portrait" />
+                    ) : (
+                        <div className="character-portrait-placeholder" /> 
+                    )}
                     <h2>{character.name}</h2>
                     {character.alignment && (
                         <div className="alignment-display">
@@ -1023,7 +1039,9 @@ const GameScreen = ({ gameState, onAction, onNewGame, onLevelUp, isLoading, onCu
                     <div className="story-panel">
                         <div className="illustration-container">
                            {isLoading && <div className="illustration-loader"><Loader text="Drawing next scene..."/></div>}
-                           <img src={currentScene.illustration || ''} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
+                           {currentScene.illustration ? (
+                               <img src={currentScene.illustration} alt="Current scene" className={`story-illustration ${isLoading ? 'loading' : ''}`} />
+                           ) : null}
                         </div>
                         <div className="story-text">
                             <button
@@ -1244,6 +1262,221 @@ const GameOverScreen = ({ onNewGame }: { onNewGame: () => void }) => (
     </div>
 );
 
+const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading, setIsLoading }: { 
+    gameState: GameState, 
+    onExit: () => void, 
+    onUpdateGold: (amount: number) => void,
+    onAddItem: (item: Equipment) => void,
+    isLoading: boolean,
+    setIsLoading: (loading: boolean) => void
+}) => {
+    // Local state for the UI, synced with parent if needed, but simple local state works for the session
+    const [activeGame, setActiveGame] = useState<'menu' | 'dice' | 'riddle' | 'rune'>('menu');
+    const [bet, setBet] = useState(10);
+    const [log, setLog] = useState<{ message: string, type: string }[]>([]);
+    const [riddle, setRiddle] = useState<{question: string, answer: string} | null>(null);
+    const [riddleInput, setRiddleInput] = useState('');
+
+    const character = gameState.character!;
+
+    const addLog = (message: string, type: 'neutral' | 'win' | 'lose' | 'item' = 'neutral') => {
+        setLog(prev => [{ message, type }, ...prev]);
+    };
+
+    const handleDiceRoll = () => {
+        if (character.gold < bet) {
+            addLog("Not enough gold!", "lose");
+            return;
+        }
+        onUpdateGold(-bet); // Deduct bet immediately
+
+        const roll1 = Math.floor(Math.random() * 6) + 1;
+        const roll2 = Math.floor(Math.random() * 6) + 1;
+        const total = roll1 + roll2;
+
+        let message = `Rolled ${roll1} + ${roll2} = ${total}. `;
+        
+        if (total === 7 || total === 11) {
+            const winnings = bet * 2;
+            onUpdateGold(winnings);
+            message += `Lucky! You win ${winnings} gold!`;
+            addLog(message, 'win');
+        } else if (total === 2 || total === 3 || total === 12) {
+            message += `Critical fail! You lost your bet.`;
+            addLog(message, 'lose');
+        } else {
+             message += `Push. You get your bet back.`;
+             onUpdateGold(bet);
+             addLog(message, 'neutral');
+        }
+    };
+
+    const handleRiddleStart = async () => {
+        if (character.gold < bet) {
+            addLog("Not enough gold!", "lose");
+            return;
+        }
+        setIsLoading(true);
+        try {
+            const response = await callGemini(
+                "gemini-2.5-flash", 
+                "Generate a tricky fantasy riddle. JSON format.", 
+                { responseMimeType: "application/json", responseSchema: riddleSchema }
+            );
+            const data = JSON.parse(response.candidates[0].content.parts[0].text);
+            setRiddle(data);
+            onUpdateGold(-bet); // Pay to play
+            addLog(`Riddle: ${data.question}`, 'neutral');
+        } catch (e) {
+            addLog("The Riddler is silent...", 'lose');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleRiddleSubmit = () => {
+        if (!riddle) return;
+        if (riddleInput.toLowerCase().trim() === riddle.answer.toLowerCase().trim()) {
+            const winnings = bet * 5;
+            onUpdateGold(winnings);
+            addLog(`Correct! The answer was ${riddle.answer}. You win ${winnings} gold!`, 'win');
+            setRiddle(null);
+            setRiddleInput('');
+        } else {
+            addLog(`Wrong! The answer was ${riddle.answer}. You lost your wager.`, 'lose');
+            setRiddle(null);
+            setRiddleInput('');
+        }
+    };
+
+    const handleRuneCast = async () => {
+        if (character.gold < 100) {
+            addLog("Runes require a tribute of 100 gold.", "lose");
+            return;
+        }
+        setIsLoading(true);
+        onUpdateGold(-100); // Fixed cost
+
+        try {
+            const prompt = `
+                Simulate a high-stakes rune casting game.
+                The player pays 100 gold.
+                - 50% chance to lose nothing (outcome: "nothing").
+                - 30% chance to win gold (outcome: "win_gold", multiplier 1.5x to 5x).
+                - 15% chance to lose more gold (outcome: "lose_gold").
+                - 5% chance to win a RARE elite item (outcome: "win_item").
+                Generate the result in JSON.
+            `;
+            const response = await callGemini(
+                "gemini-2.5-flash", 
+                prompt, 
+                { responseMimeType: "application/json", responseSchema: runeSchema }
+            );
+            const data = JSON.parse(response.candidates[0].content.parts[0].text);
+
+            addLog(data.narrative, 'neutral');
+
+            if (data.outcome === 'win_gold') {
+                const winnings = Math.floor(100 * data.multiplier);
+                onUpdateGold(winnings);
+                addLog(`Fortune smiles! You win ${winnings} gold.`, 'win');
+            } else if (data.outcome === 'win_item' && data.item) {
+                onAddItem(data.item);
+                addLog(`AMAZING! You received: ${data.item.name}`, 'item');
+            } else if (data.outcome === 'lose_gold') {
+                // Already paid 100, maybe lose extra? Let's just say the 100 is gone.
+                addLog(`The runes darken. Your tribute is consumed.`, 'lose');
+            } else {
+                addLog(`The runes are silent.`, 'neutral');
+            }
+
+        } catch (e) {
+            addLog("The stones crack. Try again.", 'lose');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="gambling-container">
+            <div className="gambling-header">
+                <h1>Mystic Casino</h1>
+                <div className="gambling-gold">Gold: {character.gold}</div>
+                <button onClick={onExit} className="cancel-btn">Leave</button>
+            </div>
+
+            {activeGame === 'menu' ? (
+                <div className="game-selection-grid">
+                    <div className="game-card" onClick={() => setActiveGame('dice')}>
+                        <h3>🎲 Dragon Dice</h3>
+                        <p>Classic craps. Roll 7 or 11 to double your money.</p>
+                    </div>
+                    <div className="game-card" onClick={() => setActiveGame('riddle')}>
+                        <h3>🧩 Sphinx's Riddle</h3>
+                        <p>Solve the AI's riddle to win 5x your bet!</p>
+                    </div>
+                    <div className="game-card" onClick={() => setActiveGame('rune')}>
+                        <h3>✨ Gemini Runes</h3>
+                        <p>Cost: 100g. High risk, chance for Elite Gear.</p>
+                    </div>
+                </div>
+            ) : (
+                <div className="active-game-area">
+                    <button onClick={() => { setActiveGame('menu'); setRiddle(null); }} style={{marginBottom: '1rem'}}>← Back to Games</button>
+                    
+                    {activeGame === 'dice' && (
+                        <div>
+                            <h2>Dragon Dice</h2>
+                            <label>Wager: </label>
+                            <input type="number" className="bet-input" value={bet} onChange={e => setBet(Number(e.target.value))} min={1} />
+                            <button onClick={handleDiceRoll}>Roll (2d6)</button>
+                        </div>
+                    )}
+
+                    {activeGame === 'riddle' && (
+                        <div>
+                            <h2>Sphinx's Riddle</h2>
+                            {!riddle ? (
+                                <div>
+                                    <label>Wager: </label>
+                                    <input type="number" className="bet-input" value={bet} onChange={e => setBet(Number(e.target.value))} min={1} />
+                                    <button onClick={handleRiddleStart} disabled={isLoading}>Challenge the Sphinx</button>
+                                </div>
+                            ) : (
+                                <div>
+                                    <p style={{fontSize: '1.2rem', fontStyle: 'italic', margin: '1rem 0'}}>"{riddle.question}"</p>
+                                    <input 
+                                        type="text" 
+                                        className="riddle-input" 
+                                        value={riddleInput} 
+                                        onChange={e => setRiddleInput(e.target.value)} 
+                                        placeholder="Your answer..."
+                                    />
+                                    <button onClick={handleRiddleSubmit} style={{marginTop: '1rem'}}>Submit Answer</button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {activeGame === 'rune' && (
+                        <div>
+                            <h2>Gemini Runes</h2>
+                            <p>Cost: 100 Gold per cast.</p>
+                            <button onClick={handleRuneCast} disabled={isLoading || character.gold < 100}>Cast Runes</button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            <div className="gambling-log">
+                {log.map((l, i) => (
+                    <p key={i} className={l.type}>&gt; {l.message}</p>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 // --- MAIN APP ---
 
 const App = () => {
@@ -1265,6 +1498,32 @@ const App = () => {
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
+
+  const handleUpdateGold = (amount: number) => {
+    setGameState(prev => {
+        if (!prev.character) return prev;
+        return {
+            ...prev,
+            character: { ...prev.character, gold: prev.character.gold + amount }
+        };
+    });
+};
+
+const handleAddGamblingItem = (item: Equipment) => {
+    setGameState(prev => {
+        if (!prev.character) return prev;
+        return {
+            ...prev,
+            character: { 
+                ...prev.character, 
+                equipment: {
+                    ...prev.character.equipment,
+                    gear: [...(prev.character.equipment.gear || []), item]
+                }
+            }
+        };
+    });
+};
 
   // Add a ref to track if the game has already initialized to prevent strict-mode double firing
   const hasLoaded = useRef(false);
@@ -1296,7 +1555,7 @@ const App = () => {
 
         // Step 2: Generate Image via Imagen Proxy
         const imageResponse = await callImagen(
-            'imagen-3.0-generate-002',
+            'imagen-4.0-fast-generate-001',
             `fantasy art, digital painting. ${finalPrompt}`,
             {
                 numberOfImages: 1,
@@ -1305,6 +1564,11 @@ const App = () => {
                 safetySettings: safetySettings,
             }
         );
+
+        if (!imageResponse.generatedImages || imageResponse.generatedImages.length === 0) {
+            console.warn("No images generated (likely safety filter).");
+            return null;
+        }
 
         // Extract image bytes from the serialized response
         const base64ImageBytes = imageResponse.generatedImages[0].image.imageBytes;
@@ -1735,6 +1999,7 @@ const App = () => {
             };
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
+                const updatedCompanions = [...prevState.companions];
                 const oldXp = prevState.character.xp;
                 const newXp = oldXp + data.didXpChange;
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
@@ -1813,7 +2078,6 @@ const App = () => {
                     equipment: updatedEquipment,
                 };
 
-                const updatedCompanions = [...prevState.companions];
                 if (data.companionUpdates) {
                     for (const update of data.companionUpdates) {
                         const companionIndex = updatedCompanions.findIndex(c => c.name === update.name);
@@ -2357,6 +2621,15 @@ const App = () => {
 
   const renderContent = () => {
     switch (gameState.gameStatus) {
+      case 'gambling':
+        return <GamblingScreen 
+            gameState={gameState} 
+            onExit={() => setGameState(g => ({...g, gameStatus: 'playing'}))}
+            onUpdateGold={handleUpdateGold}
+            onAddItem={handleAddGamblingItem}
+            isLoading={apiIsLoading}
+            setIsLoading={setApiIsLoading}
+        />;
       case 'playing':
         return <GameScreen
                     gameState={gameState}
@@ -2369,6 +2642,7 @@ const App = () => {
                     onSyncGoldAndLoot={handleSyncGoldAndLoot}
                     onSyncMap={handleSyncMap}
                     getAlignmentDescriptor={getAlignmentDescriptor}
+                    onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))}
                 />;
       case 'characterCreation':
         return <CharacterCreationScreen onCreate={handleCreateCharacter} isLoading={apiIsLoading} />;
