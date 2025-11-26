@@ -15,7 +15,9 @@ import {
   getFirestore, 
   doc, 
   setDoc, 
-  getDoc, 
+  getDoc,
+  getDocs,
+  deleteDoc,
   onSnapshot, 
   collection, 
   addDoc, 
@@ -84,6 +86,15 @@ const safetySettings = [
 ];
 
 // --- TYPE DEFINITIONS ---
+interface SavedGame {
+    id: string;
+    name: string;
+    characterClass: string;
+    level: number;
+    lastPlayed: any;
+    gameState: GameState;
+}
+
 interface Character {
   name: string;
   gender: string;
@@ -1626,10 +1637,51 @@ const WaitingRoom = ({ lobby, onStart }: { lobby: MultiplayerLobby, onStart: () 
     </div>
 );
 
+const CharacterSelect = ({ 
+    saves, 
+    onSelect, 
+    onNew, 
+    onDelete 
+}: { 
+    saves: SavedGame[], 
+    onSelect: (save: SavedGame) => void, 
+    onNew: () => void, 
+    onDelete: (id: string) => void 
+}) => {
+    return (
+        <div className="lobby-container">
+            <h1>Select Your Hero</h1>
+            <div className="lobby-list">
+                {saves.map(save => (
+                    <div key={save.id} className="lobby-item" style={{display: 'flex', gap: '1rem', alignItems: 'center'}}>
+                        {save.gameState.character?.portrait && (
+                            <img 
+                                src={save.gameState.character.portrait} 
+                                style={{width: '50px', height: '50px', borderRadius: '50%', objectFit: 'cover'}} 
+                            />
+                        )}
+                        <div style={{flex: 1}}>
+                            <h3>{save.name}</h3>
+                            <p style={{fontSize: '0.9rem', color: '#aaa'}}>
+                                Lvl {Object.values(save.gameState.character?.skills || {}).reduce((a, b) => a + b, 0)} {save.characterClass}
+                            </p>
+                        </div>
+                        <button onClick={() => onSelect(save)}>Play</button>
+                        <button onClick={() => onDelete(save.id)} style={{borderColor: '#e74c3c', color: '#e74c3c'}}>Delete</button>
+                    </div>
+                ))}
+            </div>
+            <div style={{textAlign: 'center', marginTop: '2rem'}}>
+                <button onClick={onNew} className="new-game-btn">Create New Character</button>
+            </div>
+        </div>
+    );
+};
+
 // --- MAIN APP ---
 
 const App = () => {
-  // 1. ALL STATE DEFINITIONS FIRST
+  // 1. STATE DEFINITIONS
   const [user, setUser] = useState<User | null>(null);
   const [lobbyId, setLobbyId] = useState<string | null>(null);
   const [isMultiplayer, setIsMultiplayer] = useState(false);
@@ -1653,10 +1705,52 @@ const App = () => {
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
 
-  // 2. REFS (Move this up from the bottom)
+  // 2. REFS
   const hasLoaded = useRef(false);
 
-  // Add this inside App component
+  // 3. CALLBACKS & HELPER FUNCTIONS (Moved UP)
+  
+  const handleNewGame = useCallback(() => {
+      localStorage.removeItem('endlessAdventureSave');
+      setCreationData(null);
+      setGameState(prevState => ({
+        ...prevState, 
+        character: null,
+        companions: [],
+        storyLog: [],
+        currentActions: [],
+        storyGuidance: null,
+        skillPools: null,
+        weather: 'Clear Skies',
+        timeOfDay: 'Morning',
+        gameStatus: 'characterCreation',
+        combat: null,
+        loot: null,
+        transaction: null,
+        map: null,
+      }));
+  }, []);
+
+  const handleLogin = async () => {
+      try {
+          await signInWithPopup(auth, googleProvider);
+      } catch (error) {
+          console.error("Login failed", error);
+      }
+  };
+
+  const uploadImageToStorage = async (base64Data: string, path: string): Promise<string> => {
+        if (!base64Data || !base64Data.startsWith('data:image')) return base64Data;
+        try {
+            const storageRef = ref(storage, path);
+            await uploadString(storageRef, base64Data, 'data_url');
+            return await getDownloadURL(storageRef);
+        } catch (error) {
+            console.error("Upload failed:", error);
+            return base64Data; 
+        }
+  };
+
   const migrateLocalSaveToCloud = async (uid: string) => {
     const localSave = localStorage.getItem('endlessAdventureSave');
     if (!localSave) return; 
@@ -1678,7 +1772,7 @@ const App = () => {
             localState.map.backgroundImage = url;
         }
 
-        // 3. Upload Story Illustrations (This is usually the biggest part)
+        // 3. Upload Story Illustrations
         if (localState.storyLog) {
             const newStoryLog = await Promise.all(localState.storyLog.map(async (segment: any, index: number) => {
                 if (segment.illustration?.startsWith('data:')) {
@@ -1694,63 +1788,18 @@ const App = () => {
         const docSnap = await getDoc(userGameRef);
         
         if (!docSnap.exists()) {
-            // Now saving the 'lightweight' version with URLs instead of raw image data
             await setDoc(userGameRef, {
                 gameState: localState,
                 creationData: localCreation,
                 lastUpdated: serverTimestamp()
             });
             console.log("Successfully migrated local save to cloud!");
-            // Optional: Clear local storage after successful migration
-            // localStorage.removeItem('endlessAdventureSave'); 
         }
     } catch (e) {
         console.error("Migration failed:", e);
     }
   };
 
-  // 1. Auth Listener
-  useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-            setUser(currentUser);
-            if (currentUser) {
-                // 1. Try to migrate existing local data first
-                await migrateLocalSaveToCloud(currentUser.uid);
-                // 2. Then load the game (which will now find the migrated data)
-                loadCloudGame(currentUser.uid); 
-            }
-        });
-        return () => unsubscribe();
-    }, []);
-
-  // 2. UPDATE THIS: Update your lobby listener to save the data
-  useEffect(() => {
-      if (!lobbyId) return;
-      const unsub = onSnapshot(doc(db, "lobbies", lobbyId), (doc) => {
-          if (doc.exists()) {
-              const data = doc.data() as MultiplayerLobby;
-              setLobbyData(data); // <--- Save this!
-              
-              if (data.gameState) {
-                  setGameState(data.gameState);
-              }
-              if (data.status === 'playing' && gameState.gameStatus === 'initial_load') {
-                  setGameState(prev => ({ ...prev, gameStatus: 'playing' }));
-              }
-          }
-      });
-      return () => unsub();
-  }, [lobbyId]);
-
-  const handleLogin = async () => {
-      try {
-          await signInWithPopup(auth, googleProvider);
-      } catch (error) {
-          console.error("Login failed", error);
-      }
-  };
-
-  // Replace old load logic with Firestore logic
   const loadCloudGame = async (uid: string) => {
       const docRef = doc(db, "users", uid, "games", "singleplayer");
       const docSnap = await getDoc(docRef);
@@ -1763,19 +1812,14 @@ const App = () => {
       }
   };
 
-  // Replace old save logic with Firestore logic
-  // Call this inside your existing useEffect or where appropriate
   const saveGameToCloud = async (stateToSave: any) => {
       if (!user) return;
       
       if (isMultiplayer && lobbyId) {
-          // In multiplayer, only the "active" player or host writes mostly, 
-          // but usually we update the whole lobby doc.
           await updateDoc(doc(db, "lobbies", lobbyId), {
               gameState: stateToSave
           });
       } else {
-          // Single player save
           await setDoc(doc(db, "users", user.uid, "games", "singleplayer"), {
               gameState: stateToSave,
               creationData: creationData,
@@ -1783,17 +1827,6 @@ const App = () => {
           });
       }
   };
-
-  // --- NEW: The Auto-Save Hook ---
-  // Triggers whenever gameState changes (except during loading/initial)
-  useEffect(() => {
-      if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading' && user) {
-          const timeoutId = setTimeout(() => {
-              saveGameToCloud(gameState);
-          }, 1000); // Debounce save by 1s
-          return () => clearTimeout(timeoutId);
-      }
-  }, [gameState, user, isMultiplayer, lobbyId]);
 
   const handleCreateLobby = async () => {
       if (!user) return;
@@ -1814,92 +1847,11 @@ const App = () => {
       const docRef = await addDoc(collection(db, "lobbies"), newLobby);
       setLobbyId(docRef.id);
       setIsMultiplayer(true);
-      setGameState(prev => ({ ...prev, gameStatus: 'initial_load' })); // Using initial_load as 'waiting' state here
+      setGameState(prev => ({ ...prev, gameStatus: 'initial_load' }));
   };
-
-  // UPDATE this function in App component
-  const handleActionWrapper = async (action: string) => {
-        if (isMultiplayer && lobbyId && lobbyData) {
-            const currentPlayerIndex = lobbyData.currentTurnIndex % lobbyData.players.length;
-            const currentPlayer = lobbyData.players[currentPlayerIndex];
-
-            // BLOCK ACTION if it's not your turn
-            if (currentPlayer.uid !== user?.uid) {
-                alert(`It is ${currentPlayer.displayName}'s turn!`);
-                return;
-            }
-
-            // OPTIMISTIC UPDATE: Advance turn immediately locally so UI feels responsive
-            // The real AI response will overwrite this later
-            const nextTurnIndex = lobbyData.currentTurnIndex + 1;
-            await updateDoc(doc(db, "lobbies", lobbyId), {
-                currentTurnIndex: nextTurnIndex
-            });
-        }
-        
-        // Proceed with the AI action generation
-        await handleAction(action);
-    };
-
-  // --- Render Logic Updates ---
-
-  if (!user) {
-      return <AuthScreen onLogin={handleLogin} />;
-  }
-
-  if (!gameState.character && !creationData && !lobbyId && gameState.gameStatus === 'initial_load') {
-      return <LobbyBrowser 
-          onSinglePlayer={() => { setIsMultiplayer(false); handleNewGame(); }}
-          onCreate={handleCreateLobby} 
-          onJoin={(id) => { setLobbyId(id); setIsMultiplayer(true); }} 
-      />;
-  }
-
-  // --- UPDATED: Render the actual Waiting Room Component ---
-  if (isMultiplayer && lobbyId && gameState.gameStatus === 'initial_load') {
-      if (!lobbyData) return <div className="lobby-container"><Loader text="Connecting to lobby..." /></div>;
-      
-      return <WaitingRoom 
-          lobby={lobbyData} 
-          onStart={async () => {
-              // Host starts the game
-              await updateDoc(doc(db, "lobbies", lobbyId), { status: 'playing' });
-          }} 
-      />;
-  }
-
-  const handleUpdateGold = (amount: number) => {
-    setGameState(prev => {
-        if (!prev.character) return prev;
-        return {
-            ...prev,
-            character: { ...prev.character, gold: prev.character.gold + amount }
-        };
-    });
-};
-
-const handleAddGamblingItem = (item: Equipment) => {
-    setGameState(prev => {
-        if (!prev.character) return prev;
-        return {
-            ...prev,
-            character: { 
-                ...prev.character, 
-                equipment: {
-                    ...prev.character.equipment,
-                    gear: [...(prev.character.equipment.gear || []), item]
-                }
-            }
-        };
-    });
-};
-
-  // Add a ref to track if the game has already initialized to prevent strict-mode double firing
-  const hasLoaded = useRef(false);
 
   const generateImage = useCallback(async (prompt: string): Promise<string | null> => {
     try {
-        // Step 1: Sanitize prompt via Gemini Proxy
         const promptGenerationResponse = await callGemini(
             "gemini-2.5-flash",
             `Based on the following description, create a concise, sanitized, and effective image generation prompt suitable for a fantasy art style. Focus on the key visual elements. Description: "${prompt}"`,
@@ -1909,9 +1861,7 @@ const handleAddGamblingItem = (item: Equipment) => {
                 safetySettings: safetySettings,
             }
         );
-        // Note: The structure of the response might be slightly different depending on how SDK serializes it.
-        // Usually, response.text is a function in the SDK, but coming from JSON it might be a property or inside candidates.
-        // We handle the text extraction safely:
+        
         let jsonText = "";
         if (promptGenerationResponse.text) {
              jsonText = promptGenerationResponse.text;
@@ -1922,7 +1872,6 @@ const handleAddGamblingItem = (item: Equipment) => {
         const sanitizedData = JSON.parse(jsonText);
         const finalPrompt = sanitizedData.prompt;
 
-        // Step 2: Generate Image via Imagen Proxy
         const imageResponse = await callImagen(
             'imagen-4.0-fast-generate-001',
             `fantasy art, digital painting. ${finalPrompt}`,
@@ -1941,161 +1890,18 @@ const handleAddGamblingItem = (item: Equipment) => {
 
         const base64Image = `data:image/jpeg;base64,${imageResponse.generatedImages[0].image.imageBytes}`;
         
-        // 3. Upload to Firebase Storage immediately
         if (auth.currentUser) {
             const filename = `generated_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
             const path = `users/${auth.currentUser.uid}/generated/${filename}`;
             return await uploadImageToStorage(base64Image, path);
         }
 
-        return base64Image; // Fallback if not logged in (shouldn't happen in game)
+        return base64Image;
     } catch (error) {
         console.error("Image generation failed:", error);
         return null;
     }
   }, []);
-
-  const handleNewGame = useCallback(() => {
-      localStorage.removeItem('endlessAdventureSave');
-      setCreationData(null);
-      setGameState(prevState => ({
-        ...prevState, // Keep existing state properties
-        character: null,
-        companions: [],
-        storyLog: [],
-        currentActions: [],
-        storyGuidance: null,
-        skillPools: null,
-        weather: 'Clear Skies',
-        timeOfDay: 'Morning',
-        gameStatus: 'characterCreation',
-        combat: null,
-        loot: null,
-        transaction: null,
-        map: null,
-      }));
-  }, [setGameState, setCreationData]); // Add dependencies
-
-  // Updated Load Logic: Prevents double-execution and redundant regeneration
-  useEffect(() => {
-    const loadGame = async () => {
-      // Prevent double-loading in Strict Mode
-      if (hasLoaded.current) return;
-      hasLoaded.current = true;
-
-      try {
-        const savedStateJSON = localStorage.getItem('endlessAdventureSave');
-        if (savedStateJSON) {
-          const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
-
-          // Only regenerate portrait if absolutely missing (it should now be saved)
-          if (savedGameState.character) {
-              if (!savedGameState.character.portrait) {
-                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
-              }
-              if (!savedGameState.character.maxHp) {
-                  savedGameState.character.maxHp = 100;
-              }
-          }
-
-          // Only regenerate map if absolutely missing
-          if (savedGameState.character && !savedGameState.map) {
-              // Regenerate character portrait on load if it's missing
-              if (!savedGameState.character.portrait) {
-                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
-              }
-              // *** FIX: Add maxHp if it's missing from an old save ***
-              if (!savedGameState.character.maxHp) {
-                  savedGameState.character.maxHp = 100;
-              }
-          }
-
-          // --- FIX FOR OLD SAVES: Generate map if it doesn't exist ---
-          if (savedGameState.character && !savedGameState.map) {
-              console.log("Old save detected. Generating new map...");
-              const mapImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
-              const startingLocation: MapLocation = {
-                  name: "Starting Point",
-                  x: 50,
-                  y: 50,
-                  visited: true,
-                  description: savedGameState.storyLog[0]?.text || "The beginning of your journey."
-              };
-              savedGameState.map = {
-                  backgroundImage: mapImage,
-                  locations: [startingLocation]
-              };
-          } else if (savedGameState.map && !savedGameState.map.backgroundImage) {
-              savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
-          }
-
-          // Only regenerate illustration if missing AND we are actively playing
-          if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
-              const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
-              if (!lastSegment.illustration) {
-                  lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
-              }
-          }
-
-          setGameState(prevState => ({
-              ...prevState,
-              ...savedGameState
-          }));
-
-          if (savedCreationData) {
-            setCreationData(savedCreationData);
-          }
-
-        } else {
-          handleNewGame();
-        }
-      } catch (error) {
-        console.error("Failed to load save:", error);
-        handleNewGame();
-      }
-    };
-
-    loadGame();
-  }, [generateImage, handleNewGame]);
-
-  // Updated Save Logic: Tries to persist images to save costs
-  useEffect(() => {
-    if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
-      const saveState = (includeImages: boolean) => {
-          const stateToSave = {
-            ...gameState,
-            // Try to keep the portrait if includeImages is true
-            character: gameState.character
-              ? { ...gameState.character, portrait: includeImages ? gameState.character.portrait : null }
-              : null,
-            storyLog: gameState.storyLog.map((segment, index) => {
-              // Keep the last illustration if includeImages is true
-              if (index === gameState.storyLog.length - 1) {
-                return includeImages ? segment : { ...segment, illustration: null };
-              }
-              return { ...segment, illustration: null };
-            }),
-            // Try to keep the map background if includeImages is true
-            map: gameState.map ? { ...gameState.map, backgroundImage: includeImages ? gameState.map.backgroundImage : null } : null
-          };
-          
-          try {
-            localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
-          } catch (e) {
-            // If we hit the 5MB limit, fallback to stripping images to ensure progress is saved
-            if (includeImages) {
-                console.warn("Save quota exceeded. Removing images from save file.");
-                saveState(false);
-            } else {
-                console.error("Failed to save game even without images:", e);
-            }
-          }
-      };
-
-      // Attempt to save WITH images first
-      saveState(true);
-    }
-  }, [gameState, creationData]);
 
   const handleCreateCharacter = useCallback(async (details: CreationDetails) => {
     setApiIsLoading(true);
@@ -2135,12 +1941,10 @@ const handleAddGamblingItem = (item: Equipment) => {
         if (response.text && typeof response.text === 'string') {
             data = JSON.parse(response.text);
         } else {
-            // Fallback for serialized JSON response structure
             data = JSON.parse(response.candidates[0].content.parts[0].text);
         }
 
         const initialCompanions: Companion[] = data.companions.map((comp: any) => {
-            // Transform the skills array from the API into a key-value object
             const skillsObject = comp.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
                 acc[skill.skillName] = skill.level;
                 return acc;
@@ -2148,12 +1952,11 @@ const handleAddGamblingItem = (item: Equipment) => {
 
             return {
                 ...comp,
-                skills: skillsObject, // Replace the array with the new object
+                skills: skillsObject,
                 alignment: comp.alignment,
                 relationship: 0
             };
         });
-
 
         setCreationData({
             name: data.character.name,
@@ -2197,7 +2000,6 @@ const handleAddGamblingItem = (item: Equipment) => {
             visited: loc.name === creationData.startingMap.startingLocationName
         }));
 
-
         let startingGold = Math.floor(Math.random() * 100) + 1;
         if (["Noble", "Royalty", "Merchant"].includes(creationData.background)) {
             startingGold = Math.floor(Math.random() * 1000) + 1;
@@ -2235,7 +2037,7 @@ const handleAddGamblingItem = (item: Equipment) => {
             },
             gameStatus: 'playing'
         }));
-        setCreationData(null); // Clean up temp data
+        setCreationData(null);
 
      } catch (error) {
         console.error("Character finalization failed:", error);
@@ -2246,7 +2048,6 @@ const handleAddGamblingItem = (item: Equipment) => {
   }, [creationData, generateImage, handleNewGame]);
 
   const handleAction = useCallback(async (action: string) => {
-    // Guard clause: Prevent spamming action button
     if (!gameState.character || !gameState.storyGuidance || apiIsLoading) return;
     setApiIsLoading(true);
 
@@ -2317,7 +2118,6 @@ const handleAddGamblingItem = (item: Equipment) => {
         if (response.text && typeof response.text === 'string') {
             data = JSON.parse(response.text).story;
         } else {
-            // Fallback for serialized JSON response structure
             data = JSON.parse(response.candidates[0].content.parts[0].text).story;
         }
         if (data.initiateCombat && data.enemies && data.enemies.length > 0) {
@@ -2350,7 +2150,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                         enemies,
                         log: combatLog,
                         turn: 'player',
-                        // MODIFY THIS LINE:
                         availableActions: data.actions || ['Attack', 'Defend', 'Use Skill']
                     },
                     storyLog: [...prevState.storyLog, combatIntroSegment],
@@ -2371,7 +2170,7 @@ const handleAddGamblingItem = (item: Equipment) => {
             const newSegment: StorySegment = {
                 text: data.text,
                 illustration: newIllustration,
-                skillCheck: data.skillCheck // <-- Save the skill check data
+                skillCheck: data.skillCheck
             };
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
@@ -2391,7 +2190,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                     }
                 }
 
-                // Handle equipment updates
                 const updatedEquipment = { ...prevState.character.equipment };
                 if (data.equipmentUpdates) {
                     for (const update of data.equipmentUpdates) {
@@ -2406,7 +2204,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                         } else if (update.slot === 'armor') {
                             updatedEquipment.armor = newEquipmentItem;
                         } else if (update.slot === 'gear') {
-                            // This assumes 'add' is the only action for 'gear' for simplicity
                             if (update.action === 'add') {
                                  updatedEquipment.gear = [...(updatedEquipment.gear || []), newEquipmentItem];
                             }
@@ -2414,7 +2211,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                     }
                 }
 
-                 // Handle map updates
                 const updatedMap = prevState.map ? { ...prevState.map, locations: [...prevState.map.locations] } : null;
                 if (updatedMap && data.mapUpdate) {
                     if (data.mapUpdate.newLocations) {
@@ -2436,7 +2232,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                     if(data.alignmentChange) {
                         const lawfulnessDiff = Math.abs(newAlignment.lawfulness - comp.alignment.lawfulness);
                         const goodnessDiff = Math.abs(newAlignment.goodness - comp.alignment.goodness);
-                        // If alignments are becoming more different, slightly decrease relationship
                         if (lawfulnessDiff > Math.abs(prevState.character.alignment.lawfulness - comp.alignment.lawfulness) ||
                             goodnessDiff > Math.abs(prevState.character.alignment.goodness - comp.alignment.goodness)) {
                             comp.relationship -= 1;
@@ -2463,7 +2258,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                     }
                 }
 
-                // Handle adding a new companion
                 if (data.newCompanion && action.toLowerCase().includes(`recruit ${data.newCompanion.name.toLowerCase()}`)) {
                      if (updatedCompanions.length < 5) {
                         const skillsObject = data.newCompanion.skills.reduce((acc: { [key: string]: number }, skill: { skillName: string, level: number }) => {
@@ -2493,7 +2287,6 @@ const handleAddGamblingItem = (item: Equipment) => {
             });
         }
 
-        // ... rest of the function for generating story summary
         const newStoryLogLength = gameState.storyLog.length + 1;
         if (newStoryLogLength > 0 && newStoryLogLength % 10 === 0) {
             const oldSummary = gameState.character?.storySummary || "The story has just begun.";
@@ -2532,7 +2325,6 @@ const handleAddGamblingItem = (item: Equipment) => {
             if (summaryResponse.text && typeof summaryResponse.text === 'string') {
                 summaryData = JSON.parse(summaryResponse.text);
             } else {
-                // Fallback for serialized JSON response structure
                 summaryData = JSON.parse(summaryResponse.candidates[0].content.parts[0].text);
             }
 
@@ -2556,7 +2348,6 @@ const handleAddGamblingItem = (item: Equipment) => {
 }, [gameState, generateImage, apiIsLoading]);
 
   const handleCombatAction = useCallback(async (action: string) => {
-    // Guard clause: Prevent spamming combat button
     if (!gameState.character || !gameState.combat || apiIsLoading) return;
     setApiIsLoading(true);
 
@@ -2604,11 +2395,9 @@ const handleAddGamblingItem = (item: Equipment) => {
         if (response.text && typeof response.text === 'string') {
             data = JSON.parse(response.text).combatResult;
         } else {
-            // Fallback for serialized JSON response structure
             data = JSON.parse(response.candidates[0].content.parts[0].text).combatResult;
         }
 
-        // --- Client-Side Victory Check ---
         const newEnemies = [...gameState.combat.enemies];
         data.enemyHpChanges.forEach((change: { id: string, hpChange: number }) => {
             const enemyIndex = newEnemies.findIndex(e => e.id === change.id);
@@ -2645,7 +2434,6 @@ const handleAddGamblingItem = (item: Equipment) => {
             if (victoryResponse.text && typeof victoryResponse.text === 'string') {
                 victoryData = JSON.parse(victoryResponse.text).combatResult;
             } else {
-                // Fallback for serialized JSON response structure
                 victoryData = JSON.parse(victoryResponse.candidates[0].content.parts[0].text).combatResult;
             }
             const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${victoryData.victoryText}`);
@@ -2673,7 +2461,6 @@ const handleAddGamblingItem = (item: Equipment) => {
                 };
             });
         } else {
-            // Combat continues
             setGameState(prevState => {
                 if (!prevState.character || !prevState.combat) return prevState;
                 const newLog: CombatLogEntry[] = data.log.map((message: string) => ({ type: 'info', message }));
@@ -2690,84 +2477,6 @@ const handleAddGamblingItem = (item: Equipment) => {
         setApiIsLoading(false);
     }
 }, [gameState, generateImage, apiIsLoading]);
-
-  const handleLootContinue = () => {
-    // This now just transitions the state, the story log is updated in handleCombatAction
-    handleAction("What happens now?");
-    setGameState(prevState => ({
-        ...prevState,
-        gameStatus: 'playing',
-        loot: null,
-    }));
-  };
-
-  const handleTransaction = (item: Equipment, action: 'buy' | 'sell') => {
-    setGameState(prevState => {
-        if (!prevState.character) return prevState;
-
-        let newGold = prevState.character.gold;
-        let newGear = [...(prevState.character.equipment.gear || [])];
-
-        if (action === 'buy') {
-            newGold -= item.value;
-            newGear.push(item);
-        } else {
-            newGold += Math.floor(item.value / 2);
-            newGear = newGear.filter(i => i.name !== item.name);
-        }
-
-        return {
-            ...prevState,
-            character: {
-                ...prevState.character,
-                gold: newGold,
-                equipment: {
-                    ...prevState.character.equipment,
-                    gear: newGear,
-                },
-            },
-        };
-    });
-  };
-
-  const handleTransactionExit = () => {
-    setGameState(prevState => ({
-        ...prevState,
-        gameStatus: 'playing',
-        transaction: null,
-    }));
-  };
-
-  const handleCustomActionSubmit = (action: string) => {
-      setIsCustomActionModalOpen(false);
-      handleAction(action);
-  };
-
-  const handleLevelUpComplete = (updatedSkills: {[key: string]: number}) => {
-      setGameState(g => {
-        if (!g.character) return g;
-
-        const pointsSpent = Object.values(updatedSkills).reduce((sum, level) => sum + level, 0) - Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
-
-        // Calculate HP gain: 3d6 + current level
-        const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
-        const hpGain = diceRolls.reduce((a, b) => a + b, 0) + Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
-
-        const newMaxHp = g.character.maxHp + hpGain;
-
-        return {
-            ...g,
-            character: {
-                ...g.character,
-                skills: updatedSkills,
-                skillPoints: g.character.skillPoints - pointsSpent,
-                maxHp: newMaxHp,
-                hp: newMaxHp, // Heal to full on level up
-            },
-            gameStatus: 'playing'
-        }
-      });
-  };
 
   const handleSyncMap = useCallback(async () => {
     if (!gameState.character || !gameState.storyGuidance || !gameState.storyLog) return;
@@ -2798,7 +2507,6 @@ const handleAddGamblingItem = (item: Equipment) => {
         if (response.text && typeof response.text === 'string') {
             data = JSON.parse(response.text);
         } else {
-            // Fallback for serialized JSON response structure
             data = JSON.parse(response.candidates[0].content.parts[0].text);
         }
         const mapImage = await generateImage(`A fantasy world map for a story about ${gameState.storyGuidance.plot}.`);
@@ -2862,19 +2570,17 @@ const handleAddGamblingItem = (item: Equipment) => {
         if (response.text && typeof response.text === 'string') {
             data = JSON.parse(response.text);
         } else {
-            // Fallback for serialized JSON response structure
             data = JSON.parse(response.candidates[0].content.parts[0].text);
         }
 
         setGameState(prevState => {
             if (!prevState.character) return prevState;
 
-            // Update companions with new alignment data
             const updatedCompanions = prevState.companions.map(comp => {
                 const syncedComp = data.companionAlignments.find((sc: any) => sc.name === comp.name);
                 return syncedComp
                     ? { ...comp, alignment: { lawfulness: syncedComp.lawfulness, goodness: syncedComp.goodness } }
-                    : comp; // Keep old alignment if not found in sync data
+                    : comp;
             });
 
             return {
@@ -2901,7 +2607,6 @@ const handleAddGamblingItem = (item: Equipment) => {
             if (!g.character || g.character.name !== "Cinderblaze") return g;
 
             let totalHp = 100;
-            // Start from level 2 up to 16
             for (let level = 2; level <= 16; level++) {
                 const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
                 const hpGain = diceRolls.reduce((a, b) => a + b, 0) + level;
@@ -2954,6 +2659,281 @@ const handleAddGamblingItem = (item: Equipment) => {
     });
   };
 
+  const handleUpdateGold = (amount: number) => {
+    setGameState(prev => {
+        if (!prev.character) return prev;
+        return {
+            ...prev,
+            character: { ...prev.character, gold: prev.character.gold + amount }
+        };
+    });
+  };
+
+  const handleAddGamblingItem = (item: Equipment) => {
+    setGameState(prev => {
+        if (!prev.character) return prev;
+        return {
+            ...prev,
+            character: { 
+                ...prev.character, 
+                equipment: {
+                    ...prev.character.equipment,
+                    gear: [...(prev.character.equipment.gear || []), item]
+                }
+            }
+        };
+    });
+  };
+
+  const handleLootContinue = () => {
+    handleAction("What happens now?");
+    setGameState(prevState => ({
+        ...prevState,
+        gameStatus: 'playing',
+        loot: null,
+    }));
+  };
+
+  const handleTransaction = (item: Equipment, action: 'buy' | 'sell') => {
+    setGameState(prevState => {
+        if (!prevState.character) return prevState;
+
+        let newGold = prevState.character.gold;
+        let newGear = [...(prevState.character.equipment.gear || [])];
+
+        if (action === 'buy') {
+            newGold -= item.value;
+            newGear.push(item);
+        } else {
+            newGold += Math.floor(item.value / 2);
+            newGear = newGear.filter(i => i.name !== item.name);
+        }
+
+        return {
+            ...prevState,
+            character: {
+                ...prevState.character,
+                gold: newGold,
+                equipment: {
+                    ...prevState.character.equipment,
+                    gear: newGear,
+                },
+            },
+        };
+    });
+  };
+
+  const handleTransactionExit = () => {
+    setGameState(prevState => ({
+        ...prevState,
+        gameStatus: 'playing',
+        transaction: null,
+    }));
+  };
+
+  const handleLevelUpComplete = (updatedSkills: {[key: string]: number}) => {
+      setGameState(g => {
+        if (!g.character) return g;
+
+        const pointsSpent = Object.values(updatedSkills).reduce((sum, level) => sum + level, 0) - Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
+
+        const diceRolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1);
+        const hpGain = diceRolls.reduce((a, b) => a + b, 0) + Object.values(g.character.skills).reduce((sum, level) => sum + level, 0);
+
+        const newMaxHp = g.character.maxHp + hpGain;
+
+        return {
+            ...g,
+            character: {
+                ...g.character,
+                skills: updatedSkills,
+                skillPoints: g.character.skillPoints - pointsSpent,
+                maxHp: newMaxHp,
+                hp: newMaxHp,
+            },
+            gameStatus: 'playing'
+        }
+      });
+  };
+
+  const handleActionWrapper = async (action: string) => {
+        if (isMultiplayer && lobbyId && lobbyData) {
+            const currentPlayerIndex = lobbyData.currentTurnIndex % lobbyData.players.length;
+            const currentPlayer = lobbyData.players[currentPlayerIndex];
+
+            if (currentPlayer.uid !== user?.uid) {
+                alert(`It is ${currentPlayer.displayName}'s turn!`);
+                return;
+            }
+
+            const nextTurnIndex = lobbyData.currentTurnIndex + 1;
+            await updateDoc(doc(db, "lobbies", lobbyId), {
+                currentTurnIndex: nextTurnIndex
+            });
+        }
+        
+        await handleAction(action);
+  };
+
+  const getAlignmentDescriptor = (alignment: Alignment): string => {
+        const { lawfulness, goodness } = alignment;
+        let descriptor = "";
+
+        if (goodness > 33) descriptor += "Good";
+        else if (goodness < -33) descriptor += "Evil";
+        else descriptor += "Neutral";
+
+        if (lawfulness > 33) descriptor = "Lawful " + descriptor;
+        else if (lawfulness < -33) descriptor = "Chaotic " + descriptor;
+
+        return descriptor.trim();
+  };
+
+  // 4. EFFECTS (Moved UP)
+
+  useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+            setUser(currentUser);
+            if (currentUser) {
+                await migrateLocalSaveToCloud(currentUser.uid);
+                loadCloudGame(currentUser.uid); 
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+  useEffect(() => {
+      if (!lobbyId) return;
+      const unsub = onSnapshot(doc(db, "lobbies", lobbyId), (doc) => {
+          if (doc.exists()) {
+              const data = doc.data() as MultiplayerLobby;
+              setLobbyData(data); 
+              
+              if (data.gameState) {
+                  setGameState(data.gameState);
+              }
+              if (data.status === 'playing' && gameState.gameStatus === 'initial_load') {
+                  setGameState(prev => ({ ...prev, gameStatus: 'playing' }));
+              }
+          }
+      });
+      return () => unsub();
+  }, [lobbyId]);
+
+  useEffect(() => {
+      if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading' && user) {
+          const timeoutId = setTimeout(() => {
+              saveGameToCloud(gameState);
+          }, 1000); 
+          return () => clearTimeout(timeoutId);
+      }
+  }, [gameState, user, isMultiplayer, lobbyId]);
+
+  useEffect(() => {
+    const loadGame = async () => {
+      if (hasLoaded.current) return;
+      hasLoaded.current = true;
+
+      try {
+        const savedStateJSON = localStorage.getItem('endlessAdventureSave');
+        if (savedStateJSON) {
+          const { gameState: savedGameState, creationData: savedCreationData } = JSON.parse(savedStateJSON);
+
+          if (savedGameState.character) {
+              if (!savedGameState.character.portrait) {
+                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+              }
+              if (!savedGameState.character.maxHp) {
+                  savedGameState.character.maxHp = 100;
+              }
+          }
+
+          if (savedGameState.character && !savedGameState.map) {
+              if (!savedGameState.character.portrait) {
+                  savedGameState.character.portrait = await generateImage(savedGameState.character.description);
+              }
+              if (!savedGameState.character.maxHp) {
+                  savedGameState.character.maxHp = 100;
+              }
+          }
+
+          if (savedGameState.character && !savedGameState.map) {
+              const mapImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+              const startingLocation: MapLocation = {
+                  name: "Starting Point",
+                  x: 50,
+                  y: 50,
+                  visited: true,
+                  description: savedGameState.storyLog[0]?.text || "The beginning of your journey."
+              };
+              savedGameState.map = {
+                  backgroundImage: mapImage,
+                  locations: [startingLocation]
+              };
+          } else if (savedGameState.map && !savedGameState.map.backgroundImage) {
+              savedGameState.map.backgroundImage = await generateImage(`A fantasy world map for a story about ${savedGameState.storyGuidance.plot}.`);
+          }
+
+          if (savedGameState.gameStatus === 'playing' && savedGameState.storyLog.length > 0) {
+              const lastSegment = savedGameState.storyLog[savedGameState.storyLog.length - 1];
+              if (!lastSegment.illustration) {
+                  lastSegment.illustration = await generateImage(`${savedGameState.storyGuidance.setting}. ${lastSegment.text}`);
+              }
+          }
+
+          setGameState(prevState => ({
+              ...prevState,
+              ...savedGameState
+          }));
+
+          if (savedCreationData) {
+            setCreationData(savedCreationData);
+          }
+
+        } else {
+          handleNewGame();
+        }
+      } catch (error) {
+        console.error("Failed to load save:", error);
+        handleNewGame();
+      }
+    };
+
+    loadGame();
+  }, [generateImage, handleNewGame]);
+
+  useEffect(() => {
+    if (gameState.gameStatus !== 'initial_load' && gameState.gameStatus !== 'loading') {
+      const saveState = (includeImages: boolean) => {
+          const stateToSave = {
+            ...gameState,
+            character: gameState.character
+              ? { ...gameState.character, portrait: includeImages ? gameState.character.portrait : null }
+              : null,
+            storyLog: gameState.storyLog.map((segment, index) => {
+              if (index === gameState.storyLog.length - 1) {
+                return includeImages ? segment : { ...segment, illustration: null };
+              }
+              return { ...segment, illustration: null };
+            }),
+            map: gameState.map ? { ...gameState.map, backgroundImage: includeImages ? gameState.map.backgroundImage : null } : null
+          };
+          
+          try {
+            localStorage.setItem('endlessAdventureSave', JSON.stringify({ gameState: stateToSave, creationData }));
+          } catch (e) {
+            if (includeImages) {
+                console.warn("Save quota exceeded. Removing images from save file.");
+                saveState(false);
+            } else {
+                console.error("Failed to save game even without images:", e);
+            }
+          }
+      };
+      saveState(true);
+    }
+  }, [gameState, creationData]);
+
    useEffect(() => {
     const handleForceActions = () => {
       console.log("Force combat actions command received.");
@@ -2973,33 +2953,17 @@ const handleAddGamblingItem = (item: Equipment) => {
 
     window.addEventListener('force-combat-actions', handleForceActions);
     (window as any).syncMap = handleSyncMap;
-    (window as any).syncAlignment = handleSyncAlignment; // Add this line
+    (window as any).syncAlignment = handleSyncAlignment; 
 
     return () => {
       window.removeEventListener('force-combat-actions', handleForceActions);
     };
-  }, [handleSyncMap, handleSyncAlignment]); // The empty dependency array means this runs only once
-  
+  }, [handleSyncMap, handleSyncAlignment]);
 
-  const getAlignmentDescriptor = (alignment: Alignment): string => {
-        const { lawfulness, goodness } = alignment;
-        let descriptor = "";
+  // 5. RENDER LOGIC (Conditionals happen here)
 
-        if (goodness > 33) descriptor += "Good";
-        else if (goodness < -33) descriptor += "Evil";
-        else descriptor += "Neutral";
-
-        if (lawfulness > 33) descriptor = "Lawful " + descriptor;
-        else if (lawfulness < -33) descriptor = "Chaotic " + descriptor;
-
-        return descriptor.trim();
-  };
-
-  // 3. ADD THIS: Calculate the turn boolean
-  // It is your turn if: Multiplayer is OFF OR (Lobby exists AND current player ID matches yours)
   const isMyTurn = !isMultiplayer || (!!lobbyData && !!user && lobbyData.players[lobbyData.currentTurnIndex % lobbyData.players.length]?.uid === user.uid);
 
-  // 4. UPDATE THIS: Pass the prop in renderContent
   const renderContent = () => {
     switch (gameState.gameStatus) {
       case 'gambling':
@@ -3014,7 +2978,6 @@ const handleAddGamblingItem = (item: Equipment) => {
       case 'playing':
         return <GameScreen
             gameState={gameState}
-            // Use handleActionWrapper for multiplayer turn logic
             onAction={handleActionWrapper} 
             onNewGame={handleNewGame}
             onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))}
@@ -3065,6 +3028,29 @@ const handleAddGamblingItem = (item: Equipment) => {
         return <Loader text="Loading..." />;
     }
   };
+
+  if (!user) {
+      return <AuthScreen onLogin={handleLogin} />;
+  }
+
+  if (!gameState.character && !creationData && !lobbyId && gameState.gameStatus === 'initial_load') {
+      return <LobbyBrowser 
+          onSinglePlayer={() => { setIsMultiplayer(false); handleNewGame(); }}
+          onCreate={handleCreateLobby} 
+          onJoin={(id) => { setLobbyId(id); setIsMultiplayer(true); }} 
+      />;
+  }
+
+  if (isMultiplayer && lobbyId && gameState.gameStatus === 'initial_load') {
+      if (!lobbyData) return <div className="lobby-container"><Loader text="Connecting to lobby..." /></div>;
+      
+      return <WaitingRoom 
+          lobby={lobbyData} 
+          onStart={async () => {
+              await updateDoc(doc(db, "lobbies", lobbyId), { status: 'playing' });
+          }} 
+      />;
+  }
 
   return (
     <div id="app-container">
