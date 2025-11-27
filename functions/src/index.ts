@@ -37,16 +37,17 @@ export const imagenProxy = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res)
     try {
       const { model, prompt, config } = req.body;
 
-      // Call the Imagen API
-      const response = await ai.models.generateImages({
+      // SWITCH TO GEMINI 2.5 FLASH IMAGE (Nano Banana)
+      // Note: We map 'prompt' to 'contents' for the new API method
+      const response = await ai.models.generateContent({
         model: model,
-        prompt: prompt,
+        contents: prompt, 
         config: config
       });
 
       res.json(response);
     } catch (error: any) {
-      logger.error("Imagen Proxy Error", error);
+      logger.error("Gemini Image Proxy Error", error);
       res.status(500).send({ error: error.message });
     }
   });
