@@ -108,12 +108,14 @@ interface CharacterStats {
 // 2. Update Character Interface
 interface Character {
   name: string;
+  characterClass: string;
   gender: string;
   hp: number;
   maxHp: number;
   xp: number;
   skills: { [key: string]: number };
   skillPoints: number;
+  statPoints: number;
   // --- ADDED STATS ---
   stats: CharacterStats;
   // -------------------
@@ -483,6 +485,10 @@ const nextStepSchema = {
             properties: {
                 text: { type: Type.STRING, description: "The next paragraph of the story, describing the outcome of the player's action."},
                 actions: { type: Type.ARRAY, items: { type: Type.STRING }, description: "A new array of 3-4 actions the player can take now."},
+                goldChange: { 
+                    type: Type.INTEGER, 
+                    description: "The amount of gold gained (positive) or lost (negative) during this story segment. Use for purchases, bribes, or finding loose coin." 
+                },
                 didHpChange: { type: Type.INTEGER, description: "The number of HP points the character gained or lost (e.g., -10 or 5). Should be 0 if no change."},
                 didXpChange: { type: Type.INTEGER, description: "The number of XP points the character gained. Should be 0 if no change."},
                 alignmentChange: {
@@ -632,7 +638,7 @@ const nextStepSchema = {
                     required: ['skillName', 'success', 'difficulty']
                 }
             },
-            required: ['text', 'actions', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay', 'mapUpdate']
+            required: ['text', 'actions', 'goldChange', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay', 'mapUpdate']
         }
     },
     required: ['story']
@@ -813,6 +819,54 @@ const runeSchema = {
   required: ['outcome', 'narrative']
 };
 
+const equipmentSyncSchema = {
+    type: Type.OBJECT,
+    properties: {
+        equipment: {
+            type: Type.OBJECT,
+            properties: {
+                weapon: {
+                    type: Type.OBJECT,
+                    nullable: true,
+                    properties: {
+                        name: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true } } },
+                        value: { type: Type.INTEGER }
+                    },
+                    required: ['name', 'description', 'stats', 'value']
+                },
+                armor: {
+                    type: Type.OBJECT,
+                    nullable: true,
+                    properties: {
+                        name: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        stats: { type: Type.OBJECT, properties: { damageReduction: { type: Type.INTEGER, nullable: true } } },
+                        value: { type: Type.INTEGER }
+                    },
+                    required: ['name', 'description', 'stats', 'value']
+                },
+                gear: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING },
+                            description: { type: Type.STRING },
+                            stats: { type: Type.OBJECT, properties: { damage: { type: Type.INTEGER, nullable: true }, damageReduction: { type: Type.INTEGER, nullable: true } } },
+                            value: { type: Type.INTEGER }
+                        },
+                        required: ['name', 'description', 'stats', 'value']
+                    }
+                }
+            },
+            required: ['weapon', 'armor', 'gear']
+        }
+    },
+    required: ['equipment']
+};
+
 // --- STATIC DATA ---
 const RACES = ["Human", "Elf", "Dwarf", "Orc", "Halfling", "Gnome", "Dragonborn", "Tiefling", "Half-Elf"];
 const CLASSES = ["Warrior", "Paladin", "Ranger", "Rogue", "Monk", "Barbarian", "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard", "Artificer", "Blood Hunter", "Death Knight", "Demon Hunter", "Spellblade", "Necromancer", "Summoner", "Elementalist", "Shaman", "Templar", "Assassin", "Swashbuckler", "Gunslinger", "Alchemist", "Berserker", "Gladiator", "Scout", "Inquisitor"];
@@ -822,9 +876,16 @@ const BACKGROUNDS = ["Commoner", "Noble", "Royalty", "Magical Family", "Farmer",
 // --- UI COMPONENTS ---
 
 const Loader = ({ text }: { text: string }) => (
-  <div className="loader-container">
-    <div className="loader"></div>
-    <p>{text}</p>
+  <div className="flex flex-col items-center justify-center w-full h-full min-h-[50vh] flex-grow bg-[#0B132B] text-center p-8 rounded-xl">
+    <video 
+      src="/loading.mp4" 
+      autoPlay 
+      loop 
+      muted 
+      playsInline
+      className="w-64 h-64 object-contain mb-6 drop-shadow-[0_0_25px_rgba(242,166,13,0.2)]"
+    />
+    <p className="text-[#bab09c] text-xl font-bold font-display animate-pulse uppercase tracking-[0.2em]">{text}</p>
   </div>
 );
 
@@ -1730,7 +1791,7 @@ const SettingsModal = ({ isOpen, onClose, currentAccent, onChangeAccent }: { isO
     );
 };
 
-const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, getAlignmentDescriptor, onOpenGambling, isMyTurn }: any) => {
+const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, getAlignmentDescriptor, onOpenGambling, isMyTurn, onSyncEquipment }: any) => {
     const { character, storyLog, currentActions, map, companions } = gameState;
     const [customInput, setCustomInput] = useState("");''
     
@@ -1741,8 +1802,22 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
     const [viewingSkill, setViewingSkill] = useState<Skill | null>(null);
 
     const storyEndRef = useRef<HTMLDivElement>(null);
+    // Track initial mount to use instant scrolling instead of smooth
+    const isInitialMount = useRef(true);
+
     useEffect(() => {
-        storyEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        // Delay scroll slightly to allow DOM layout and images to settle
+        const timer = setTimeout(() => {
+            if (isInitialMount.current) {
+                isInitialMount.current = false;
+                // Instant scroll on game load
+                storyEndRef.current?.scrollIntoView({ behavior: "auto" });
+            } else {
+                // Smooth scroll for new messages
+                storyEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }
+        }, 100);
+        return () => clearTimeout(timer);
     }, [storyLog]);
 
     // --- UPDATED AUDIO HANDLER ---
@@ -1804,7 +1879,7 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
                         <div className="bg-center bg-no-repeat bg-cover rounded-full size-16 border-2 border-[#544c3b]" style={{backgroundImage: `url(${character.portrait})`}}></div>
                         <div>
                             <h1 className="text-white text-xl font-bold font-display">{character.name}</h1>
-                            <p className="text-[#bab09c] text-sm">Lvl {Math.max(1, Object.values(character.skills).reduce((a:any,b:any)=>a+b,0)-5)} Adventurer</p>
+                            <p className="text-[#bab09c] text-sm">Lvl {Math.max(1, Object.values(character.skills).reduce((a:any,b:any)=>a+b,0)-5)} {character.characterClass}</p>
                         </div>
                     </div>
 
@@ -1877,7 +1952,21 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
                         {/* Equipment */}
                         <details className="group rounded-lg border border-[#393328] bg-[#221c10] open:bg-[#2a2418] transition-colors" open>
                             <summary className="flex cursor-pointer items-center justify-between p-3 font-medium text-white list-none">
-                                <span>Equipment</span><span className="material-symbols-outlined transition-transform group-open:rotate-180">expand_more</span>
+                                <span>Equipment</span>
+                                <div className="flex items-center gap-2">
+                                    {/* --- SYNC BUTTON --- */}
+                                    <button 
+                                        onClick={(e) => { e.preventDefault(); onSyncEquipment(); }}
+                                        className="text-xs bg-primary/20 text-primary px-2 py-1 rounded hover:bg-primary/40 border border-primary/30 flex items-center gap-1"
+                                        title="Fix buggy inventory using AI"
+                                        disabled={isLoading}
+                                    >
+                                        <span className="material-symbols-outlined text-sm">sync</span>
+                                        Fix
+                                    </button>
+                                    {/* ------------------- */}
+                                    <span className="material-symbols-outlined transition-transform group-open:rotate-180">expand_more</span>
+                                </div>
                             </summary>
                             <div className="px-3 pb-3 text-sm text-[#bab09c] space-y-2">
                                 <div className="flex flex-col gap-1 pb-1 border-b border-white/5">
@@ -1974,7 +2063,11 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
                                     )}
                                 </div>
                             ))}
-                            {isLoading && <div className="flex justify-center py-4"><div className="loader border-primary/30 border-t-primary h-8 w-8"></div></div>}
+                            {isLoading && (
+                                <div className="animate-in fade-in duration-500">
+                                    <Loader text="The Dungeon Master is weaving the next chapter..." />
+                                </div>
+                            )}
                             <div ref={storyEndRef} />
                         </div>
                     </div>
@@ -2126,7 +2219,7 @@ const CombatScreen = ({ gameState, onCombatAction, isLoading, onBackToMenu }: { 
                             style={{backgroundImage: `url(${character.portrait})`}}
                         ></div>
                         <p className="text-white text-2xl font-bold leading-tight tracking-wide font-combat-display">{character.name}</p>
-                        <p className="text-combat-primary text-sm font-bold uppercase tracking-wider mb-2">Lvl {level} Adventurer</p>
+                        <p className="text-combat-primary text-sm font-bold uppercase tracking-wider mb-2">Lvl {level} {character.characterClass}</p>
                     </div>
                     
                     {/* Stats Bars */}
@@ -2324,18 +2417,10 @@ const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: Ga
 
     // Calculate Price Modifiers based on CHA
     const cha = character.stats.cha;
-    // "lowers prices when buying" -> High CHA = Low Multiplier
     // Base 8. For every point above 8, reduce price by 2%. Max 50% off.
     const buyMult = Math.max(0.5, 1.0 - ((cha - 8) * 0.02));
-    
-    // "increases prices when selling" -> High CHA = High Multiplier
     // Base sell is 50% of value. CHA adds to this.
     const sellMult = 0.5 + ((cha - 8) * 0.02);
-
-    // ... inside the list mapping ...
-    // Display modified prices:
-    const buyPrice = Math.ceil(item.value * buyMult);
-    const sellPrice = Math.floor(item.value * sellMult);
 
     return (
         <div className="relative flex h-auto min-h-screen w-full flex-col p-4 sm:p-6 lg:p-8 bg-background-dark font-display overflow-y-auto">
@@ -2362,28 +2447,33 @@ const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: Ga
                         <div className="flex h-full flex-col">
                             <h2 className="text-white text-xl sm:text-2xl font-bold leading-tight tracking-wide px-4 pb-3 pt-2 border-b border-white/10 mb-2 font-serif">Vendor's Wares</h2>
                             <div className="flex flex-col divide-y divide-white/10 rounded-lg bg-white/5 overflow-hidden border border-white/5">
-                                {transaction.inventory.map((item, index) => (
-                                    <div key={index} className="flex items-center gap-4 px-4 py-3 justify-between hover:bg-white/10 transition-colors duration-200 group">
-                                        <div className="flex items-center gap-4">
-                                            <div className="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-14 sm:size-16 bg-[#221c10] flex items-center justify-center text-white/20 border border-white/5 group-hover:border-primary/30 transition-colors">
-                                                <span className="material-symbols-outlined text-3xl">shopping_bag</span>
+                                {transaction.inventory.map((item, index) => {
+                                    // --- FIX: Calculation moved inside map ---
+                                    const buyPrice = Math.ceil(item.value * buyMult);
+                                    return (
+                                        <div key={index} className="flex items-center gap-4 px-4 py-3 justify-between hover:bg-white/10 transition-colors duration-200 group">
+                                            <div className="flex items-center gap-4">
+                                                <div className="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-14 sm:size-16 bg-[#221c10] flex items-center justify-center text-white/20 border border-white/5 group-hover:border-primary/30 transition-colors">
+                                                    <span className="material-symbols-outlined text-3xl">shopping_bag</span>
+                                                </div>
+                                                <div className="flex flex-1 flex-col justify-center">
+                                                    <p className="text-white text-base font-medium leading-normal">{item.name}</p>
+                                                    {/* Removed 'line-clamp-1' so text wraps naturally */}
+                                                    <p className="text-white/60 text-sm font-normal leading-normal">{item.description}</p>
+                                                </div>
                                             </div>
-                                            <div className="flex flex-1 flex-col justify-center">
-                                                <p className="text-white text-base font-medium leading-normal">{item.name}</p>
-                                                <p className="text-white/60 text-sm font-normal leading-normal line-clamp-1">{item.description}</p>
+                                            <div className="flex-shrink-0">
+                                                <button 
+                                                    onClick={() => onTransaction(item, 'buy')}
+                                                    disabled={character.gold < buyPrice}
+                                                    className="flex min-w-[90px] cursor-pointer items-center justify-center overflow-hidden rounded-lg h-10 px-4 bg-primary/20 text-primary text-sm font-bold leading-normal w-fit hover:bg-primary/30 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-white/30"
+                                                >
+                                                    <span className="truncate">Buy ({buyPrice}g)</span>
+                                                </button>
                                             </div>
                                         </div>
-                                        <div className="flex-shrink-0">
-                                            <button 
-                                                onClick={() => onTransaction(item, 'buy')}
-                                                disabled={character.gold < buyPrice}
-                                                className="flex min-w-[90px] cursor-pointer items-center justify-center overflow-hidden rounded-lg h-10 px-4 bg-primary/20 text-primary text-sm font-bold leading-normal w-fit hover:bg-primary/30 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-white/30"
-                                            >
-                                                <span className="truncate">Buy ({buyPrice}g)</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                                 {transaction.inventory.length === 0 && (
                                     <div className="p-8 text-center text-white/40 italic">Sold out!</div>
                                 )}
@@ -2407,7 +2497,8 @@ const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: Ga
                             <h2 className="text-white text-xl sm:text-2xl font-bold leading-tight tracking-wide px-4 pb-3 pt-2 border-b border-white/10 mb-2 font-serif">Your Inventory</h2>
                             <div className="flex flex-col divide-y divide-white/10 rounded-lg bg-white/5 overflow-hidden border border-white/5">
                                 {character.equipment.gear?.map((item, index) => {
-                                    const sellValue = Math.floor(item.value / 2);
+                                    // --- FIX: Calculation moved inside map ---
+                                    const sellValue = Math.floor(item.value * sellMult);
                                     return (
                                         <div key={index} className="flex items-center gap-4 px-4 py-3 justify-between hover:bg-white/10 transition-colors duration-200 group">
                                             <div className="flex items-center gap-4">
@@ -2416,7 +2507,8 @@ const TransactionScreen = ({ gameState, onTransaction, onExit }: { gameState: Ga
                                                 </div>
                                                 <div className="flex flex-1 flex-col justify-center">
                                                     <p className="text-white text-base font-medium leading-normal">{item.name}</p>
-                                                    <p className="text-white/60 text-sm font-normal leading-normal line-clamp-1">{item.description}</p>
+                                                    {/* Removed 'line-clamp-1' so text wraps naturally */}
+                                                    <p className="text-white/60 text-sm font-normal leading-normal">{item.description}</p>
                                                 </div>
                                             </div>
                                             <div className="flex-shrink-0">
@@ -2481,10 +2573,20 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
     isLoading: boolean,
     setIsLoading: (loading: boolean) => void
 }) => {
-    // Local state for the UI, synced with parent if needed, but simple local state works for the session
     const [activeGame, setActiveGame] = useState<'menu' | 'dice' | 'riddle' | 'rune'>('menu');
     const [bet, setBet] = useState(10);
     const [log, setLog] = useState<{ message: string, type: string }[]>([]);
+    
+    // --- DRAGON DICE (CRAPS) STATE ---
+    const [dicePhase, setDicePhase] = useState<'come_out' | 'point'>('come_out');
+    const [point, setPoint] = useState<number | null>(null);
+    const [diceBetType, setDiceBetType] = useState<'pass' | 'dont_pass'>('pass');
+    const [lockedBet, setLockedBet] = useState(0); 
+    const [hornBet, setHornBet] = useState(0);
+    const [fieldBet, setFieldBet] = useState(0);
+    
+    const [hardWays, setHardWays] = useState({ 4: 0, 6: 0, 8: 0, 10: 0 });
+
     const [riddle, setRiddle] = useState<{question: string, answer: string} | null>(null);
     const [riddleInput, setRiddleInput] = useState('');
 
@@ -2494,31 +2596,190 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
         setLog(prev => [{ message, type }, ...prev]);
     };
 
+    // --- NEW: Handle Hard Way Input Changes (Raise/Lower) ---
+    const updateHardWayBet = (num: 4 | 6 | 8 | 10, newValStr: string) => {
+        const newVal = parseInt(newValStr) || 0;
+        if (newVal < 0) return;
+
+        const currentVal = hardWays[num];
+        const diff = newVal - currentVal;
+
+        if (diff === 0) return;
+
+        if (diff > 0) {
+            // Raising bet - check funds
+            if (character.gold < diff) {
+                addLog(`Not enough gold to raise Hard ${num}.`, "lose");
+                return;
+            }
+            onUpdateGold(-diff);
+        } else {
+            // Lowering bet - refund difference
+            onUpdateGold(Math.abs(diff));
+        }
+
+        setHardWays(prev => ({...prev, [num]: newVal}));
+    };
+
+    // --- NEW: Take All Bets Down ---
+    const takeDownBets = () => {
+        let refund = 0;
+        // Calculate refund from active Hard Ways
+        Object.values(hardWays).forEach(val => refund += val);
+        
+        if (refund > 0) {
+            onUpdateGold(refund);
+            addLog(`Bets taken down. Refunded ${refund}g.`, 'neutral');
+        } else {
+            addLog(`Bets cleared.`, 'neutral');
+        }
+
+        // Reset all optional bets
+        setHardWays({ 4: 0, 6: 0, 8: 0, 10: 0 });
+        setHornBet(0);
+        setFieldBet(0);
+    };
+
+    const resetDiceGame = () => {
+        setDicePhase('come_out');
+        setPoint(null);
+        setLockedBet(0);
+    };
+
     const handleDiceRoll = () => {
-        if (character.gold < bet) {
-            addLog("Not enough gold!", "lose");
+        // 1. Validate Funds for Horn/Field/Pass bets
+        let totalCost = hornBet + fieldBet;
+        if (dicePhase === 'come_out') totalCost += bet;
+
+        if (character.gold < totalCost) {
+            addLog(`Not enough gold for bets! Need ${totalCost}g.`, "lose");
             return;
         }
-        onUpdateGold(-bet); // Deduct bet immediately
 
+        // 2. Deduct Costs
+        if (hornBet > 0) onUpdateGold(-hornBet);
+        if (fieldBet > 0) onUpdateGold(-fieldBet);
+        if (dicePhase === 'come_out') {
+            onUpdateGold(-bet);
+            setLockedBet(bet);
+        }
+
+        // 3. Roll Dice
         const roll1 = Math.floor(Math.random() * 6) + 1;
         const roll2 = Math.floor(Math.random() * 6) + 1;
         const total = roll1 + roll2;
+        const isHard = roll1 === roll2; 
+        let message = `Rolled ${roll1} + ${roll2} = [${total}]. `;
 
-        let message = `Rolled ${roll1} + ${roll2} = ${total}. `;
-        
-        if (total === 7 || total === 11) {
-            const winnings = bet * 2;
-            onUpdateGold(winnings);
-            message += `Lucky! You win ${winnings} gold!`;
-            addLog(message, 'win');
-        } else if (total === 2 || total === 3 || total === 12) {
-            message += `Critical fail! You lost your bet.`;
-            addLog(message, 'lose');
+        // --- FIELD BET LOGIC ---
+        if (fieldBet > 0) {
+            if (total === 2 || total === 12) {
+                const win = fieldBet * 3; 
+                onUpdateGold(win);
+                message += ` FIELD CRIT! +${win}g `;
+            } else if ([3, 4, 9, 10, 11].includes(total)) {
+                const win = fieldBet * 2; 
+                onUpdateGold(win);
+                message += ` Field Win! +${win}g `;
+            } else {
+                message += ` Field Lost. `;
+            }
+        }
+
+        // --- HARD WAYS LOGIC ---
+        const resolveHardWay = (num: 4 | 6 | 8 | 10, payout: number) => {
+            if (hardWays[num] > 0) {
+                if (total === 7) {
+                    message += ` Lost Hard ${num}. `;
+                    setHardWays(p => ({...p, [num]: 0}));
+                } else if (total === num) {
+                    if (isHard) {
+                        const win = hardWays[num] * payout + hardWays[num];
+                        onUpdateGold(win);
+                        message += ` HARD ${num} HIT! +${win}g! `;
+                        setHardWays(p => ({...p, [num]: 0})); 
+                    } else {
+                        message += ` Soft ${num}, lost Hard ${num}. `;
+                        setHardWays(p => ({...p, [num]: 0}));
+                    }
+                }
+            }
+        };
+        resolveHardWay(4, 7); resolveHardWay(10, 7);
+        resolveHardWay(6, 9); resolveHardWay(8, 9);
+
+        // --- HORN BET LOGIC ---
+        if (hornBet > 0) {
+            if (total === 2 || total === 12) {
+                onUpdateGold(hornBet * 30);
+                message += ` HORN CRIT! +${hornBet * 30}g! `;
+            } else if (total === 3 || total === 11) {
+                onUpdateGold(hornBet * 15);
+                message += ` Horn Hit! +${hornBet * 15}g. `;
+            }
+        }
+
+        // --- MAIN GAME LOGIC ---
+        if (dicePhase === 'come_out') {
+            if (diceBetType === 'pass') {
+                if (total === 7 || total === 11) {
+                    onUpdateGold(bet * 2);
+                    addLog(message + "Natural! Pass Wins!", 'win');
+                    resetDiceGame();
+                } else if (total === 2 || total === 3 || total === 12) {
+                    addLog(message + "Craps! Pass Loses.", 'lose');
+                    resetDiceGame();
+                } else {
+                    setPoint(total);
+                    setDicePhase('point');
+                    addLog(message + `Point is ${total}.`, 'neutral');
+                }
+            } else {
+                if (total === 2 || total === 3) {
+                    onUpdateGold(bet * 2);
+                    addLog(message + "Craps! Don't Pass Wins!", 'win');
+                    resetDiceGame();
+                } else if (total === 7 || total === 11) {
+                    addLog(message + "Natural! Don't Pass Loses.", 'lose');
+                    resetDiceGame();
+                } else if (total === 12) {
+                    onUpdateGold(bet); 
+                    addLog(message + "Bar 12! Push.", 'neutral');
+                    resetDiceGame();
+                } else {
+                    setPoint(total);
+                    setDicePhase('point');
+                    addLog(message + `Point is ${total}.`, 'neutral');
+                }
+            }
         } else {
-             message += `Push. You get your bet back.`;
-             onUpdateGold(bet);
-             addLog(message, 'neutral');
+            if (diceBetType === 'pass') {
+                if (total === point) {
+                    let multiplier = 2; 
+                    if (point === 4 || point === 10) multiplier = 3;
+                    else if (point === 5 || point === 9) multiplier = 2.5;
+                    const winnings = Math.floor(lockedBet * multiplier);
+                    onUpdateGold(winnings);
+                    addLog(message + `HIT POINT! You win ${winnings}g!`, 'win');
+                    resetDiceGame();
+                } else if (total === 7) {
+                    addLog(message + "Seven Out. Pass Loses.", 'lose');
+                    resetDiceGame();
+                } else {
+                    addLog(message + "Roll again...", 'neutral');
+                }
+            } else {
+                if (total === 7) {
+                    onUpdateGold(lockedBet * 2);
+                    addLog(message + "Seven Out! Don't Pass Wins!", 'win');
+                    resetDiceGame();
+                } else if (total === point) {
+                    addLog(message + "Hit Point. Don't Pass Loses.", 'lose');
+                    resetDiceGame();
+                } else {
+                    addLog(message + "Roll again...", 'neutral');
+                }
+            }
         }
     };
 
@@ -2530,8 +2791,8 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
         setIsLoading(true);
         try {
             const response = await callGemini(
-                "gemini-2.5-flash", 
-                "Generate a tricky fantasy riddle. JSON format.", 
+                "gemini-2.5-pro", 
+                "Generate a logical and accurate tricky fantasy riddle. JSON format.", 
                 { 
                     responseMimeType: "application/json", 
                     responseSchema: riddleSchema,
@@ -2629,14 +2890,21 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
             <div className="gambling-header">
                 <h1>Mystic Casino</h1>
                 <div className="gambling-gold">Gold: {character.gold}</div>
-                <button onClick={onExit} className="cancel-btn">Leave</button>
+                <button onClick={() => {
+                    if (dicePhase === 'point' || Object.values(hardWays).some(v => v > 0)) {
+                        if(!confirm("Abandon your active bets?")) return;
+                        onExit();
+                    } else {
+                        onExit();
+                    }
+                }} className="cancel-btn">Leave</button>
             </div>
 
             {activeGame === 'menu' ? (
                 <div className="game-selection-grid">
                     <div className="game-card" onClick={() => setActiveGame('dice')}>
                         <h3>🎲 Dragon Dice</h3>
-                        <p>Classic craps. Roll 7 or 11 to double your money.</p>
+                        <p>Pass Line, Hard Ways, Horn & Field Bets!</p>
                     </div>
                     <div className="game-card" onClick={() => setActiveGame('riddle')}>
                         <h3>🧩 Sphinx's Riddle</h3>
@@ -2649,14 +2917,89 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
                 </div>
             ) : (
                 <div className="active-game-area">
-                    <button onClick={() => { setActiveGame('menu'); setRiddle(null); }} style={{marginBottom: '1rem'}}>← Back to Games</button>
+                    <button onClick={() => setActiveGame('menu')} style={{marginBottom: '1rem'}}>← Back</button>
                     
                     {activeGame === 'dice' && (
-                        <div>
-                            <h2>Dragon Dice</h2>
-                            <label>Wager: </label>
-                            <input type="number" className="bet-input" value={bet} onChange={e => setBet(Number(e.target.value))} min={1} />
-                            <button onClick={handleDiceRoll}>Roll (2d6)</button>
+                        <div className="flex flex-col gap-4 items-center">
+                            <h2 className="text-2xl font-serif text-primary">Dragon Craps</h2>
+                            
+                            <div className="flex items-center gap-4 bg-black/40 p-2 rounded-lg border border-white/10 w-full justify-between px-4">
+                                <div className="text-lg">
+                                    {point ? <span>Point: <span className="text-primary font-bold text-2xl">{point}</span></span> : "Come Out Roll"}
+                                </div>
+                                {point && <div className="text-xs text-gray-400">Main Bet: {lockedBet}g</div>}
+                            </div>
+
+                            <div className="flex flex-col gap-3 w-full max-w-md bg-black/20 p-4 rounded-xl border border-white/5">
+                                {/* PASS / DON'T PASS */}
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setDiceBetType('pass')} disabled={dicePhase === 'point'} className={`px-3 py-1 text-xs border rounded ${diceBetType === 'pass' ? 'bg-green-900/50 border-green-500 text-green-400' : 'bg-transparent border-white/20'}`}>Pass</button>
+                                        <button onClick={() => setDiceBetType('dont_pass')} disabled={dicePhase === 'point'} className={`px-3 py-1 text-xs border rounded ${diceBetType === 'dont_pass' ? 'bg-red-900/50 border-red-500 text-red-400' : 'bg-transparent border-white/20'}`}>Don't</button>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <label className="text-xs text-gray-400 uppercase">Main</label>
+                                        <input type="number" className="bet-input w-20" value={dicePhase === 'point' ? lockedBet : bet} onChange={e => setBet(Number(e.target.value))} min={1} disabled={dicePhase === 'point'} />
+                                    </div>
+                                </div>
+
+                                {/* FIELD BET */}
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <div className="flex flex-col">
+                                        <label className="text-xs font-bold text-blue-300 uppercase">Field Bet</label>
+                                        <span className="text-[9px] text-gray-500">2,3,4,9,10,11,12 (Win 1x-3x)</span>
+                                    </div>
+                                    <input type="number" className="bet-input w-20 border-blue-500/50" value={fieldBet} onChange={e => setFieldBet(Number(e.target.value))} min={0} placeholder="0" />
+                                </div>
+
+                                {/* HORN BET */}
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <div className="flex flex-col">
+                                        <label className="text-xs font-bold text-[#f2a60d] uppercase">Horn Bet</label>
+                                        <span className="text-[9px] text-gray-500">2,3,11,12 (Win 15x-30x)</span>
+                                    </div>
+                                    <input type="number" className="bet-input w-20 border-[#f2a60d]" value={hornBet} onChange={e => setHornBet(Number(e.target.value))} min={0} placeholder="0" />
+                                </div>
+
+                                {/* HARD WAYS */}
+                                <div className="flex flex-col gap-2 pt-1 border-b border-white/10 pb-3">
+                                    <div className="flex justify-between items-center">
+                                        <label className="text-[10px] font-bold text-gray-500 uppercase">Hard Ways (Persistent)</label>
+                                        {/* --- NEW BUTTON: TAKE DOWN BETS --- */}
+                                        <button 
+                                            onClick={takeDownBets}
+                                            className="text-[9px] text-red-400 hover:text-red-300 uppercase tracking-wider border border-red-900/50 px-2 py-0.5 rounded bg-red-900/10"
+                                        >
+                                            Take Down Bets
+                                        </button>
+                                        {/* ---------------------------------- */}
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        {[4, 6, 8, 10].map(n => (
+                                            <div 
+                                                key={n}
+                                                className={`flex flex-col items-center py-1 border rounded transition-colors ${hardWays[n as 4|6|8|10] > 0 ? 'bg-purple-900/40 border-purple-500' : 'bg-transparent border-white/10'}`}
+                                            >
+                                                <span className="text-xs font-bold">Hard {n}</span>
+                                                {/* --- NEW: INPUT FOR VARIABLE BETTING --- */}
+                                                <input 
+                                                    type="number"
+                                                    value={hardWays[n as 4|6|8|10]}
+                                                    onChange={(e) => updateHardWayBet(n as 4|6|8|10, e.target.value)}
+                                                    className="w-12 text-center text-[10px] bg-transparent border-none focus:ring-0 p-0 text-primary font-mono"
+                                                    min={0}
+                                                />
+                                                {/* --------------------------------------- */}
+                                                <span className="text-[9px] text-gray-500">{n===4||n===10 ? '7:1' : '9:1'}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <button onClick={handleDiceRoll} className="w-full py-4 mt-2 bg-primary text-black font-bold text-xl hover:bg-yellow-400 shadow-lg rounded-lg transition-all">
+                                    ROLL DICE
+                                </button>
+                            </div>
                         </div>
                     )}
 
@@ -2666,7 +3009,7 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
                             {!riddle ? (
                                 <div>
                                     <label>Wager: </label>
-                                    <input type="number" className="bet-input" value={bet} onChange={e => setBet(Number(e.target.value))} min={1} />
+                                    <input type="number" className="bet-input" value={bet} onChange={e => setBet(Number(e.target.value))} min={1} style={{color: 'black'}} />
                                     <button onClick={handleRiddleStart} disabled={isLoading}>Challenge the Sphinx</button>
                                 </div>
                             ) : (
@@ -2676,8 +3019,9 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
                                         type="text" 
                                         className="riddle-input" 
                                         value={riddleInput} 
-                                        onChange={e => setRiddleInput(e.target.value)} 
+                                        onChange={e => setRiddleInput(e.target.value)}
                                         placeholder="Your answer..."
+                                        style={{color: 'black'}}
                                     />
                                     <button onClick={handleRiddleSubmit} style={{marginTop: '1rem'}}>Submit Answer</button>
                                 </div>
@@ -2695,7 +3039,7 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
                 </div>
             )}
 
-            <div className="gambling-log">
+            <div className="gambling-log scrollbar-thin">
                 {log.map((l, i) => (
                     <p key={i} className={l.type}>&gt; {l.message}</p>
                 ))}
@@ -2896,33 +3240,66 @@ const WaitingRoom = ({ lobby, onStart, onLeave }: { lobby: MultiplayerLobby, onS
     );
 };
 
-const LevelUpScreen = ({ character, skillPools, onComplete }: { character: Character, skillPools: SkillPools, onComplete: (skills: any, stats: any) => void }) => {
+const LevelUpScreen = ({ character, skillPools, onComplete }: { character: Character, skillPools: SkillPools, onComplete: (skills: any, stats: any, remSkill: number, remStat: number) => void }) => {
     const [stats, setStats] = useState(character.stats);
-    const [statPoints, setStatPoints] = useState(1); // "get 1 stat point every level"
     
+    // --- FIX: Use character's actual stored points ---
+    const [statPoints, setStatPoints] = useState(character.statPoints || 0); 
     const [skills, setSkills] = useState(character.skills);
-    const [skillPoints, setSkillPoints] = useState(character.skillPoints); // Existing points
+    const [skillPoints, setSkillPoints] = useState(character.skillPoints);
+    // ------------------------------------------------
+
+    // Helper for category icons
+    const getCategoryIcon = (category: string) => {
+        switch(category) {
+            case 'Combat': return 'swords';
+            case 'Magic': return 'auto_awesome';
+            case 'Utility': return 'construction';
+            default: return 'star';
+        }
+    };
 
     const handleStatChange = (stat: keyof CharacterStats, change: number) => {
         if (change > 0 && statPoints <= 0) return;
-        // Don't allow reducing below original value
+        // Don't allow reducing below original value (can't respec old stats, only new points)
         if (change < 0 && stats[stat] <= character.stats[stat]) return;
         
         setStats(p => ({ ...p, [stat]: p[stat] + change }));
         setStatPoints(p => p - change);
     };
 
-    // ... (Reuse SkillAllocator logic here or just render it differently) ...
-    // For brevity, I'll return a simplified UI combining both.
+    const handleSkillChange = (skillName: string, change: number) => {
+        const currentLevel = skills[skillName] || 0;
+        const newLevel = currentLevel + change;
+
+        if (change > 0 && skillPoints <= 0) return; 
+        if (newLevel < 0) return; 
+        
+        // Don't allow reducing below original level
+        if (change < 0 && newLevel < (character.skills[skillName] || 0)) return;
+
+        if (newLevel === 0 && currentLevel > 0) {
+             const newSkills = {...skills};
+             delete newSkills[skillName];
+             setSkills(newSkills);
+             setSkillPoints(skillPoints + 1);
+        } else {
+            setSkills(s => ({...s, [skillName]: newLevel}));
+            setSkillPoints(p => p - change);
+        }
+    };
     
     return (
-        <div className="relative flex min-h-screen w-full flex-col bg-background-dark font-display p-8 overflow-y-auto">
-            <h1 className="text-3xl text-white font-bold text-center mb-8">Level Up Reached!</h1>
+        <div className="relative flex min-h-screen w-full flex-col bg-background-dark font-display p-4 md:p-8 overflow-y-auto">
+            <h1 className="text-3xl text-white font-bold text-center mb-8 font-heading">Level Up Reached!</h1>
             
-            <div className="max-w-4xl mx-auto w-full grid gap-8">
+            <div className="max-w-5xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-8 pb-20">
                 {/* Stat Section */}
-                <section>
-                    <h2 className="text-xl text-primary mb-4">1. Improve Attributes ({statPoints} pts)</h2>
+                <section className="bg-[#181611] p-6 rounded-xl border border-[#393328] h-fit">
+                    <h2 className="text-xl text-primary font-bold mb-4 flex justify-between">
+                        <span>1. Attributes</span>
+                        <span className="text-white text-sm bg-[#221c10] px-3 py-1 rounded border border-[#544c3b]">Points: {statPoints}</span>
+                    </h2>
                     <StatAllocator 
                         stats={stats} 
                         pointsRemaining={statPoints} 
@@ -2931,18 +3308,61 @@ const LevelUpScreen = ({ character, skillPools, onComplete }: { character: Chara
                 </section>
 
                 {/* Skill Section */}
-                <section>
-                    <h2 className="text-xl text-primary mb-4">2. Train Skills ({skillPoints} pts)</h2>
-                    {/* ... Insert Skill List UI here (reused from SkillAllocator) ... */}
-                    <p className="text-gray-400 italic">Skill training UI placeholder - Implement using SkillAllocator logic</p>
+                <section className="bg-[#181611] p-6 rounded-xl border border-[#393328] flex flex-col h-[600px]">
+                    <h2 className="text-xl text-primary font-bold mb-4 flex justify-between">
+                        <span>2. Skills</span>
+                        <span className="text-white text-sm bg-[#221c10] px-3 py-1 rounded border border-[#544c3b]">Points: {skillPoints}</span>
+                    </h2>
+                    
+                    <div className="flex-1 overflow-y-auto scrollbar-thin pr-2 flex flex-col gap-3">
+                        {Object.entries(skillPools).map(([category, categorySkills]) => (
+                            <details key={category} className="group rounded-lg border border-[#393328] bg-[#221c10] open:pb-2">
+                                <summary className="flex cursor-pointer items-center justify-between p-3 font-bold text-white list-none">
+                                    <div className="flex items-center gap-2">
+                                        <span className="material-symbols-outlined text-primary">{getCategoryIcon(category)}</span>
+                                        <span>{category}</span>
+                                    </div>
+                                    <span className="material-symbols-outlined text-[#bab09c] group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div className="px-3 pb-2 space-y-2">
+                                    {categorySkills.map((skill) => {
+                                        const level = skills[skill.name] || 0;
+                                        return (
+                                            <div key={skill.name} className="flex justify-between items-center bg-[#181611] p-2 rounded border border-white/5">
+                                                <div className="flex flex-col">
+                                                    <span className={level > 0 ? "text-white font-medium" : "text-[#bab09c]"}>{skill.name}</span>
+                                                    <span className="text-[10px] text-[#bab09c]/60 line-clamp-1">{skill.description}</span>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <button 
+                                                        onClick={() => handleSkillChange(skill.name, -1)}
+                                                        disabled={level <= (character.skills[skill.name] || 0)}
+                                                        className="w-6 h-6 rounded bg-[#393328] text-white flex items-center justify-center hover:bg-[#544c3b] disabled:opacity-30"
+                                                    >-</button>
+                                                    <span className="w-4 text-center font-mono text-white">{level}</span>
+                                                    <button 
+                                                        onClick={() => handleSkillChange(skill.name, 1)}
+                                                        disabled={skillPoints <= 0}
+                                                        className="w-6 h-6 rounded bg-[#393328] text-white flex items-center justify-center hover:bg-[#544c3b] disabled:opacity-30"
+                                                    >+</button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </details>
+                        ))}
+                    </div>
                 </section>
+            </div>
 
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-[#181611]/90 backdrop-blur border-t border-[#393328] flex justify-center z-50">
                 <button 
-                    onClick={() => onComplete(skills, stats)} 
-                    disabled={statPoints > 0} // Force spending stat point?
-                    className="py-4 bg-primary text-background-dark font-bold rounded text-xl hover:bg-yellow-500 disabled:opacity-50"
+                    // --- FIX: Pass remaining points back to parent ---
+                    onClick={() => onComplete(skills, stats, skillPoints, statPoints)} 
+                    className="py-3 px-8 bg-primary text-background-dark font-bold rounded-lg text-lg hover:bg-yellow-500 shadow-lg shadow-primary/20 transition-all"
                 >
-                    Confirm Level Up
+                    Confirm Changes
                 </button>
             </div>
         </div>
@@ -3301,6 +3721,7 @@ const App = () => {
 
         const newCharacter: Character = {
             name: creationData.name,
+            characterClass: creationData.characterClass || "Adventurer",
             gender: creationData.gender,
             hp: 100,
             maxHp: 100,
@@ -3397,6 +3818,32 @@ const App = () => {
         return bonus;
     };
 
+    // Add this helper function to calculate level up bonuses
+    const calculateLevelUpRewards = (
+        currentStats: CharacterStats, 
+        levelsGained: number
+    ): { hpGain: number, skillPointsGain: number, statPointsGain: number } => {
+        if (levelsGained <= 0) return { hpGain: 0, skillPointsGain: 0, statPointsGain: 0 };
+
+        let totalHpGain = 0;
+        let totalSkillPoints = 0;
+        let totalStatPoints = 0;
+
+        for (let i = 0; i < levelsGained; i++) {
+            // HP: 3d6 (avg 10) + CON + Level Base (1)
+            const diceRoll = Math.floor(Math.random() * 6) + 1 + Math.floor(Math.random() * 6) + 1 + Math.floor(Math.random() * 6) + 1;
+            totalHpGain += Math.max(1, diceRoll + 1 + currentStats.con);
+
+            // Skill Points: 1 base + (INT / 4)
+            totalSkillPoints += 1 + Math.floor(currentStats.int / 4);
+            
+            // Stat Points: 1 per level
+            totalStatPoints += 1;
+        }
+
+        return { hpGain: totalHpGain, skillPointsGain: totalSkillPoints, statPointsGain: totalStatPoints };
+    };
+
   const handleAction = useCallback(async (action: string) => {
     if (!gameState.character || !gameState.storyGuidance || apiIsLoading) return;
     setApiIsLoading(true);
@@ -3462,7 +3909,10 @@ const App = () => {
             PLAYER ACTION: "${action}"
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
+            If the player spends money (buying items, bribes, services) or finds money, update the 'goldChange' field. (e.g. -50 for spending 50 gold).
             If the player discovers a new location, add it to the 'mapUpdate.newLocations' array. Also, if the player travels to a location, update 'mapUpdate.updateVisited' with the location's name.
+
+            If the player gains or loses gold (e.g., finds a purse, gets paid, gets robbed), strictly output the amount in the 'goldChange' field (positive for gain, negative for loss).
 
             If the player's action is related to a specific skill (e.g., 'Use magic to create a diversion' or 'Try to disarm the guard'), perform a skill check. 
             **CRITICAL RULE:** You must apply the "Stat Bonus" percentage listed in the SKILLS section to the success probability. 
@@ -3548,6 +3998,7 @@ const App = () => {
                 const updatedCompanions = [...prevState.companions];
                 const oldXp = prevState.character.xp;
                 const newXp = oldXp + data.didXpChange;
+                const levelsGained = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
                 const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(oldXp / 100);
                 const newAlignment = { ...prevState.character.alignment };
                 if (data.alignmentChange) {
@@ -3610,11 +4061,19 @@ const App = () => {
                     }
                 });
 
+                const currentGold = prevState.character.gold || 0;
+                const goldChange = data.goldChange || 0;
+                const newGold = Math.max(0, currentGold + goldChange);
+                const rewards = calculateLevelUpRewards(prevState.character.stats, levelsGained);
+
                 const updatedCharacter = {
                     ...prevState.character,
-                    hp: prevState.character.hp + data.didHpChange,
+                    hp: prevState.character.hp + data.didHpChange + rewards.hpGain, // Add HP reward
+                    maxHp: prevState.character.maxHp + rewards.hpGain,              // Increase Max HP
                     xp: newXp,
-                    skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                    gold: prevState.character.gold + (data.goldChange || 0),
+                    skillPoints: prevState.character.skillPoints + rewards.skillPointsGain, // Add Skill Points
+                    statPoints: (prevState.character.statPoints || 0) + rewards.statPointsGain, // Add Stat Points
                     alignment: newAlignment,
                     reputation: newReputation,
                     equipment: updatedEquipment,
@@ -3729,7 +4188,7 @@ const App = () => {
         const wisMod = Math.floor((gameState.character.stats.wis - 8) / 2);
         const dodgeChance = Math.min(50, gameState.character.stats.dex * 1.5); // 1.5% per point
 
-        const prompt = `
+        const initialPrompt = `
             You are the dungeon master in a text-based RPG. The player is in combat.
             Player's action: "${action}"
 
@@ -3830,15 +4289,21 @@ const App = () => {
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
                 const newXp = prevState.character.xp + (victoryData.xpGained || 0);
-                const earnedSkillPoints = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
-                const newLoot = victoryData.loot || { gold: 0, items: [] };
+                const levelsGained = Math.floor(newXp / 100) - Math.floor(prevState.character.xp / 100);
+                
+                // --- FIX: Calculate Rewards Here ---
+                const rewards = calculateLevelUpRewards(prevState.character.stats, levelsGained);
+                // -----------------------------------
+
                 return {
                     ...prevState,
                     character: {
                         ...prevState.character,
-                        hp: newPlayerHp,
+                        hp: newPlayerHp + rewards.hpGain, // Heal/Buff HP
+                        maxHp: prevState.character.maxHp + rewards.hpGain,
                         xp: newXp,
-                        skillPoints: prevState.character.skillPoints + earnedSkillPoints,
+                        skillPoints: prevState.character.skillPoints + rewards.skillPointsGain,
+                        statPoints: (prevState.character.statPoints || 0) + rewards.statPointsGain,
                         gold: prevState.character.gold + newLoot.gold,
                         equipment: { ...prevState.character.equipment, gear: [...(prevState.character.equipment.gear || []), ...newLoot.items] },
                     },
@@ -3918,6 +4383,73 @@ const App = () => {
         setApiIsLoading(false);
     }
   }, [gameState, generateImage]);
+
+  const handleSyncEquipment = useCallback(async () => {
+    if (!gameState.character || !gameState.storyLog) return;
+    setApiIsLoading(true);
+    console.log("Syncing equipment based on story history...");
+
+    try {
+        const storyHistory = gameState.storyLog.map(s => s.text).join('\n\n');
+        // Provide current state so AI knows what might be wrong, but prioritize story history
+        const currentEquipment = JSON.stringify(gameState.character.equipment);
+
+        const prompt = `
+            Analyze the entire story history to reconstruct the character's inventory.
+            There have been bugs with items duplicating, missing, or persisting after sale.
+            
+            Current (Potentially Buggy) Inventory:
+            ${currentEquipment}
+
+            Story History:
+            ---
+            ${storyHistory}
+            ---
+
+            Task:
+            1. Identify every item the character has acquired and NOT lost/sold.
+            2. Remove duplicates (unless the story explicitly mentions multiple, e.g. "2 Potions").
+            3. Ensure the best weapon used recently is set as 'weapon' and best armor as 'armor'.
+            4. Place everything else in 'gear'.
+            5. Return the fully corrected equipment object.
+        `;
+
+        const response = await callGemini(
+            "gemini-2.5-flash",
+            prompt,
+            {
+                responseMimeType: "application/json",
+                responseSchema: equipmentSyncSchema,
+                safetySettings: safetySettings,
+            }
+        );
+
+        let data;
+        if (response.text && typeof response.text === 'string') {
+            data = JSON.parse(response.text);
+        } else {
+            data = JSON.parse(response.candidates[0].content.parts[0].text);
+        }
+
+        setGameState(prevState => {
+            if (!prevState.character) return prevState;
+            return {
+                ...prevState,
+                character: {
+                    ...prevState.character,
+                    equipment: data.equipment
+                }
+            };
+        });
+        alert("Inventory Synced with Timeline!");
+
+    } catch (error) {
+        console.error("Equipment sync failed:", error);
+        alert("Sync failed. See console.");
+    } finally {
+        setApiIsLoading(false);
+    }
+  }, [gameState]);
 
   const handleSyncAlignment = useCallback(async () => {
     if (!gameState.character || !gameState.storyLog || gameState.storyLog.length === 0) {
@@ -4120,7 +4652,12 @@ const App = () => {
   };
 
   // Update signature to accept new stats
-  const handleLevelUpComplete = (updatedSkills: {[key: string]: number}, updatedStats: CharacterStats) => {
+  const handleLevelUpComplete = (
+        updatedSkills: { [key: string]: number }, 
+        updatedStats: CharacterStats, 
+        remainingSkillPoints: number, 
+        remainingStatPoints: number
+  ) => {
       setGameState(g => {
         if (!g.character) return g;
 
@@ -4148,7 +4685,8 @@ const App = () => {
                 ...g.character,
                 skills: updatedSkills,
                 stats: updatedStats, // Update stats
-                skillPoints: (g.character.skillPoints - /* spent on skills */ 0) + skillPointsGained, // Simplified: reset logic handled in allocator
+                skillPoints: remainingSkillPoints,
+                statPoints: remainingStatPoints,
                 maxHp: newMaxHp,
                 hp: newMaxHp, // Heal on level up?
             },
@@ -4425,13 +4963,11 @@ const App = () => {
 
   function renderContent(currentGameState: GameState) {
       switch (currentGameState.gameStatus) {
-          case 'playing': return <GameScreen gameState={currentGameState} onAction={handleAction} onBackToMenu={handleBackToMenu} onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} isLoading={apiIsLoading} onCustomActionClick={() => setIsCustomActionModalOpen(true)} getAlignmentDescriptor={getAlignmentDescriptor} onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))} isMyTurn={isMyTurn} />;
+          case 'playing': return <GameScreen gameState={currentGameState} onAction={handleAction} onBackToMenu={handleBackToMenu} onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} isLoading={apiIsLoading} onCustomActionClick={() => setIsCustomActionModalOpen(true)} getAlignmentDescriptor={getAlignmentDescriptor} onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))} isMyTurn={isMyTurn} onSyncEquipment={handleSyncEquipment} />;
           case 'combat': return <CombatScreen gameState={currentGameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} onBackToMenu={handleBackToMenu} />;
-          case 'levelUp': return <SkillAllocator title="Level Up" skillPools={currentGameState.skillPools!} availablePoints={currentGameState.character!.skillPoints} initialSkills={currentGameState.character!.skills} onComplete={handleLevelUpComplete} completeButtonText="Confirm" onCancel={() => setGameState(g => ({...g, gameStatus: 'playing'}))} />;
-          case 'gambling': return <GamblingScreen gameState={currentGameState} onExit={() => setGameState(g => ({...g, gameStatus: 'playing'}))} onUpdateGold={(amt) => setGameState(p => ({...p, character: {...p.character!, gold: p.character!.gold + amt}}))} onAddItem={(itm) => setGameState(p => ({...p, character: {...p.character!, equipment: {...p.character!.equipment, gear: [...(p.character!.equipment.gear||[]), itm]}}}))} isLoading={apiIsLoading} setIsLoading={setApiIsLoading} />;
+          case 'levelUp': return <LevelUpScreen character={currentGameState.character!} skillPools={currentGameState.skillPools!} onComplete={handleLevelUpComplete} />;          case 'gambling': return <GamblingScreen gameState={currentGameState} onExit={() => setGameState(g => ({...g, gameStatus: 'playing'}))} onUpdateGold={(amt) => setGameState(p => ({...p, character: {...p.character!, gold: p.character!.gold + amt}}))} onAddItem={(itm) => setGameState(p => ({...p, character: {...p.character!, equipment: {...p.character!.equipment, gear: [...(p.character!.equipment.gear||[]), itm]}}}))} isLoading={apiIsLoading} setIsLoading={setApiIsLoading} />;
           case 'looting': return <LootScreen loot={currentGameState.loot!} onContinue={() => { setGameState(p => ({...p, gameStatus:'playing', loot:null})); handleAction("Continue story"); }} />;
-          case 'transaction': return <TransactionScreen gameState={currentGameState} onExit={() => setGameState(p => ({...p, gameStatus:'playing', transaction:null}))} onTransaction={(item, type) => { setGameState(p => { const gold = type === 'buy' ? p.character!.gold - item.value : p.character!.gold + Math.floor(item.value/2); return {...p, character: {...p.character!, gold }}}) }} />;
-          case 'gameOver': return <GameOverScreen onNewGame={() => setView('menu')} />;
+          case 'transaction': return <TransactionScreen gameState={currentGameState} onExit={handleTransactionExit} onTransaction={handleTransaction} />;          case 'gameOver': return <GameOverScreen onNewGame={() => setView('menu')} />;
           default: return <Loader text="Loading..." />;
       }
   }
