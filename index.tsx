@@ -33,6 +33,7 @@ import {
   uploadString, 
   getDownloadURL 
 } from "firebase/storage";
+import { MusicEngine } from "./music/MusicEngine";
 
 // REPLACE WITH YOUR FIREBASE CONFIG
 const firebaseConfig = {
@@ -184,6 +185,7 @@ interface GameState {
   loot: Loot | null;
   transaction: TransactionState | null;
   map: MapState | null;
+  completedRiddles: string[];
 }
 
 // Data stored before character is finalized
@@ -270,6 +272,7 @@ interface CombatState {
 interface Loot {
     gold: number;
     items: Equipment[];
+    xpGained?: number;
 }
 
 interface TransactionState {
@@ -291,6 +294,7 @@ interface MapLocation {
 interface MapState {
     backgroundImage: string | null;
     locations: MapLocation[];
+    currentLocation: string | null;
 }
 
 interface Alignment {
@@ -608,6 +612,7 @@ const nextStepSchema = {
                     },
                 },
                 reputationChange: { type: Type.OBJECT, description: "An object representing reputation changes with factions. e.g., {'City Guard': -10, 'Thieves Guild': 5}. Only include factions whose reputation changed.", properties: { faction: { type: Type.STRING }, change: { type: Type.INTEGER } } },
+                currentLocation: { type: Type.STRING, description: "The exact name of the location the player is currently at. If the player is traveling, this is the destination. MUST match a location name on the map (new or existing)." },
                 newWeather: { type: Type.STRING, description: "The new weather condition (e.g., 'Clear Skies', 'Light Rain', 'Snowing')." },
                 newTimeOfDay: { type: Type.STRING, description: "The new time of day (e.g., 'Morning', 'Afternoon', 'Night')." },
                 equipmentUpdates: {
@@ -638,7 +643,7 @@ const nextStepSchema = {
                     required: ['skillName', 'success', 'difficulty']
                 }
             },
-            required: ['text', 'actions', 'goldChange', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay', 'mapUpdate']
+            required: ['text', 'actions', 'goldChange', 'didHpChange', 'didXpChange', 'initiateCombat', 'enemies', 'companionUpdates', 'newCompanion', 'reputationChange', 'newWeather', 'newTimeOfDay', 'mapUpdate', 'currentLocation']
         }
     },
     required: ['story']
@@ -1509,18 +1514,27 @@ const MapPanel = ({ mapState, onLocationClick, isLoading }: { mapState: MapState
         <div className="map-panel">
             {isLoading && <div className="illustration-loader"><Loader text="Traveling..." /></div>}
             <img src={mapState.backgroundImage || ''} alt="World Map" className="map-image" />
-            {mapState.locations.map(location => (
-                <button
-                    key={location.name}
-                    className={`map-location-btn ${location.visited ? 'visited' : ''}`}
-                    style={{ left: `${location.x}%`, top: `${location.y}%` }}
-                    onClick={() => onLocationClick(location.name)}
-                    disabled={isLoading}
-                    title={location.description}
-                >
-                    {location.name}
-                </button>
-            ))}
+            {mapState.locations.map(location => {
+                const isCurrent = mapState.currentLocation === location.name;
+                return (
+                    <button
+                        key={location.name}
+                        className={`map-location-btn ${location.visited ? 'visited' : ''} ${isCurrent ? 'z-10' : ''}`}
+                        style={{ left: `${location.x}%`, top: `${location.y}%` }}
+                        onClick={() => onLocationClick(location.name)}
+                        disabled={isLoading}
+                        title={location.description}
+                    >
+                        <span className={`material-symbols-outlined text-2xl drop-shadow-md ${isCurrent ? 'text-primary animate-pulse scale-125' : location.visited ? 'text-primary' : 'text-white/50'}`}>
+                            {isCurrent ? 'star' : location.visited ? 'location_on' : 'radio_button_unchecked'}
+                        </span>
+                        {/* Label on hover or if current */}
+                        <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-1 ${isCurrent ? 'block' : 'hidden group-hover:block'} bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-10 border border-[#544c3b]`}>
+                            {location.name}
+                        </div>
+                    </button>
+                );
+            })}
         </div>
     );
 };
@@ -1753,7 +1767,7 @@ const MainMenuScreen = ({ onNewGame, onLoadGame, onMultiplayer, onExit }: { onNe
     );
 };
 
-const SettingsModal = ({ isOpen, onClose, currentAccent, onChangeAccent }: { isOpen: boolean, onClose: () => void, currentAccent: 'US' | 'GB', onChangeAccent: (a: 'US' | 'GB') => void }) => {
+const SettingsModal = ({ isOpen, onClose, currentAccent, onChangeAccent, isMusicPlaying, onToggleMusic }: { isOpen: boolean, onClose: () => void, currentAccent: 'US' | 'GB', onChangeAccent: (a: 'US' | 'GB') => void, isMusicPlaying: boolean, onToggleMusic: () => void }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -1781,6 +1795,15 @@ const SettingsModal = ({ isOpen, onClose, currentAccent, onChangeAccent }: { isO
                             </button>
                         </div>
                     </div>
+                    <div>
+                         <label className="block text-[#bab09c] text-sm font-medium mb-3">Background Music</label>
+                         <button 
+                            onClick={onToggleMusic}
+                            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-all ${isMusicPlaying ? 'bg-primary text-background-dark border-primary font-bold' : 'bg-transparent text-[#bab09c] border-[#393328] hover:border-[#544c3b]'}`}
+                         >
+                            {isMusicPlaying ? '🔊 ON' : '🔇 OFF'}
+                         </button>
+                    </div>
                 </div>
 
                 <button onClick={onClose} className="mt-8 w-full py-3 bg-[#221c10] border border-[#393328] text-[#bab09c] font-bold rounded-lg hover:bg-[#2a2418] transition-colors">
@@ -1791,19 +1814,30 @@ const SettingsModal = ({ isOpen, onClose, currentAccent, onChangeAccent }: { isO
     );
 };
 
-const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, getAlignmentDescriptor, onOpenGambling, isMyTurn, onSyncEquipment }: any) => {
+const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, getAlignmentDescriptor, onOpenGambling, isMyTurn, onSyncEquipment, isMusicPlaying, onToggleMusic, onRiddleSolved }: any) => {
     const { character, storyLog, currentActions, map, companions } = gameState;
-    const [customInput, setCustomInput] = useState("");''
+    const [customInput, setCustomInput] = useState("");
     
     // --- NEW STATE FOR SETTINGS ---
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [voiceAccent, setVoiceAccent] = useState<'US' | 'GB'>('US');
 
     const [viewingSkill, setViewingSkill] = useState<Skill | null>(null);
+    const [isSyncing, setIsSyncing] = useState(false);
 
     const storyEndRef = useRef<HTMLDivElement>(null);
     // Track initial mount to use instant scrolling instead of smooth
     const isInitialMount = useRef(true);
+
+    const handleSyncClick = async (e: any) => {
+        e.preventDefault();
+        setIsSyncing(true);
+        try {
+            await onSyncEquipment();
+        } finally {
+            setIsSyncing(false);
+        }
+    };
 
     useEffect(() => {
         // Delay scroll slightly to allow DOM layout and images to settle
@@ -1956,13 +1990,13 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
                                 <div className="flex items-center gap-2">
                                     {/* --- SYNC BUTTON --- */}
                                     <button 
-                                        onClick={(e) => { e.preventDefault(); onSyncEquipment(); }}
+                                        onClick={handleSyncClick}
                                         className="text-xs bg-primary/20 text-primary px-2 py-1 rounded hover:bg-primary/40 border border-primary/30 flex items-center gap-1"
                                         title="Fix buggy inventory using AI"
-                                        disabled={isLoading}
+                                        disabled={isLoading || isSyncing}
                                     >
-                                        <span className="material-symbols-outlined text-sm">sync</span>
-                                        Fix
+                                        <span className={`material-symbols-outlined text-sm ${isSyncing ? 'animate-spin' : ''}`}>sync</span>
+                                        {isSyncing ? 'Fixing...' : 'Fix'}
                                     </button>
                                     {/* ------------------- */}
                                     <span className="material-symbols-outlined transition-transform group-open:rotate-180">expand_more</span>
@@ -2154,6 +2188,8 @@ const GameScreen = ({ gameState, onAction, onBackToMenu, onLevelUp, isLoading, g
                 onClose={() => setIsSettingsOpen(false)} 
                 currentAccent={voiceAccent}
                 onChangeAccent={setVoiceAccent}
+                isMusicPlaying={isMusicPlaying}
+                onToggleMusic={onToggleMusic}
             />
             <SkillDetailModal 
                 skill={viewingSkill} 
@@ -2366,7 +2402,7 @@ const LootScreen = ({ loot, onContinue }: { loot: Loot, onContinue: () => void }
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div className="flex flex-col gap-2 rounded-lg border border-[#393328] bg-[#181611] p-6">
                                 <p className="text-base font-medium text-gray-300">XP Gained</p>
-                                <p className="text-3xl font-bold tracking-tight text-white">+???</p> {/* You can pass xpGained if you track it in state, otherwise placeholder */}
+                                <p className="text-3xl font-bold tracking-tight text-white">+{loot.xpGained || 0}</p>
                             </div>
                             <div className="flex flex-col gap-2 rounded-lg border border-[#393328] bg-[#181611] p-6">
                                 <p className="text-base font-medium text-gray-300">Gold Acquired</p>
@@ -2565,11 +2601,12 @@ const GameOverScreen = ({ onNewGame }: { onNewGame: () => void }) => (
     </div>
 );
 
-const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading, setIsLoading }: { 
+const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, onRiddleSolved, isLoading, setIsLoading }: { 
     gameState: GameState, 
     onExit: () => void, 
     onUpdateGold: (amount: number) => void,
     onAddItem: (item: Equipment) => void,
+    onRiddleSolved: (answer: string) => void,
     isLoading: boolean,
     setIsLoading: (loading: boolean) => void
 }) => {
@@ -2790,13 +2827,36 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
         }
         setIsLoading(true);
         try {
+            // 1. Calculate Difficulty
+            let difficulty = "Easy";
+            if (bet >= 500) difficulty = "Legendary (Abstract & Philosophical)";
+            else if (bet >= 200) difficulty = "Hard (Cryptic & Complex)";
+            else if (bet >= 50) difficulty = "Medium (Clever Wordplay)";
+
+            // 2. Prepare History (to avoid repeats)
+            const history = gameState.completedRiddles || [];
+            const historyStr = history.length > 0 ? `Do NOT use these answers: ${history.join(", ")}.` : "";
+
+            const prompt = `
+                Generate a fantasy riddle.
+                Difficulty Level: ${difficulty}
+                Wager: ${bet} Gold.
+                ${historyStr}
+                
+                The riddle must be solvable but challenging appropriate to the difficulty.
+                For 'Legendary', use metaphors and abstract concepts.
+                For 'Easy', use common fantasy objects.
+
+                Return JSON with 'question' and 'answer'.
+            `;
+
             const response = await callGemini(
                 "gemini-2.5-pro", 
-                "Generate a logical and accurate tricky fantasy riddle. JSON format.", 
+                prompt, 
                 { 
                     responseMimeType: "application/json", 
                     responseSchema: riddleSchema,
-                    safetySettings: safetySettings // <--- ADD THIS LINE
+                    safetySettings: safetySettings
                 }
             );
             let data;
@@ -2808,27 +2868,91 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
             
             setRiddle(data);
             onUpdateGold(-bet); 
-            addLog(`Riddle: ${data.question}`, 'neutral');
+            addLog(`Riddle (${difficulty}): ${data.question}`, 'neutral');
         } catch (e) {
-            console.error("Riddle Error:", e); // Added logging
+            console.error("Riddle Error:", e);
             addLog("The Riddler is silent...", 'lose');
         } finally {
             setIsLoading(false);
         }
     };
 
-    const handleRiddleSubmit = () => {
+    const handleRiddleSubmit = async () => {
         if (!riddle) return;
-        if (riddleInput.toLowerCase().trim() === riddle.answer.toLowerCase().trim()) {
-            const winnings = bet * 5;
-            onUpdateGold(winnings);
-            addLog(`Correct! The answer was ${riddle.answer}. You win ${winnings} gold!`, 'win');
+        setIsLoading(true);
+
+        try {
+            const verificationSchema = {
+                type: Type.OBJECT,
+                properties: {
+                    isCorrect: { type: Type.BOOLEAN },
+                    feedback: { type: Type.STRING, description: "Brief explanation of why it is correct or incorrect." }
+                },
+                required: ['isCorrect', 'feedback']
+            };
+
+            const prompt = `
+                Context: A fantasy RPG riddle game.
+                Riddle: "${riddle.question}"
+                Official Answer: "${riddle.answer}"
+                User's Guess: "${riddleInput}"
+
+                Task: Evaluate if the User's Guess is correct.
+                Rules:
+                1. Accept exact matches.
+                2. Accept synonyms (e.g., "Palantir" for "Seeing Stone", "Blade" for "Sword").
+                3. Accept close spellings or typos.
+                4. Accept thematic equivalents in fantasy lore.
+                
+                Return a JSON object with 'isCorrect' (boolean) and 'feedback' (string).
+            `;
+
+            const response = await callGemini(
+                "gemini-2.5-flash",
+                prompt,
+                {
+                    responseMimeType: "application/json",
+                    responseSchema: verificationSchema,
+                    safetySettings: safetySettings
+                }
+            );
+
+            let data;
+            if (response.text) {
+                 data = JSON.parse(response.text);
+            } else if (response.candidates && response.candidates[0].content.parts[0].text) {
+                 data = JSON.parse(response.candidates[0].content.parts[0].text);
+            } else {
+                throw new Error("Invalid response from AI");
+            }
+
+            if (data.isCorrect) {
+                const winnings = bet * 5;
+                onUpdateGold(winnings);
+                onRiddleSolved(riddle.answer); // <--- Save Logic
+                addLog(`Correct! ${data.feedback} You win ${winnings} gold!`, 'win');
+            } else {
+                addLog(`Wrong. ${data.feedback} The answer was: ${riddle.answer}`, 'lose');
+            }
+            
             setRiddle(null);
             setRiddleInput('');
-        } else {
-            addLog(`Wrong! The answer was ${riddle.answer}. You lost your wager.`, 'lose');
+
+        } catch (error) {
+            console.error("AI Verification Failed:", error);
+            // Fallback to strict string check
+            if (riddleInput.toLowerCase().trim() === riddle.answer.toLowerCase().trim()) {
+                const winnings = bet * 5;
+                onUpdateGold(winnings);
+                onRiddleSolved(riddle.answer); // <--- Save Logic
+                addLog(`Correct! The answer was ${riddle.answer}. You win ${winnings} gold!`, 'win');
+            } else {
+                addLog(`Wrong! The answer was ${riddle.answer}.`, 'lose');
+            }
             setRiddle(null);
             setRiddleInput('');
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -3022,8 +3146,11 @@ const GamblingScreen = ({ gameState, onExit, onUpdateGold, onAddItem, isLoading,
                                         onChange={e => setRiddleInput(e.target.value)}
                                         placeholder="Your answer..."
                                         style={{color: 'black'}}
+                                        disabled={isLoading}
                                     />
-                                    <button onClick={handleRiddleSubmit} style={{marginTop: '1rem'}}>Submit Answer</button>
+                                    <button onClick={handleRiddleSubmit} style={{marginTop: '1rem'}} disabled={isLoading}>
+                                        {isLoading ? "Consulting the Oracle..." : "Submit Answer"}
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -3391,10 +3518,29 @@ const App = () => {
       loot: null,
       transaction: null,
       map: null,
+      completedRiddles: [],
   });
   const [creationData, setCreationData] = useState<CreationData | null>(null);
   const [apiIsLoading, setApiIsLoading] = useState(false);
   const [isCustomActionModalOpen, setIsCustomActionModalOpen] = useState(false);
+  
+  // MUSIC ENGINE
+  const [musicEngine] = useState(() => new MusicEngine(import.meta.env.VITE_GEMINI_API_KEY || ""));
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+
+  useEffect(() => {
+    if (gameState.gameStatus === 'combat') {
+       musicEngine.updateSituation("Combat started! High danger, epic battle.");
+    } else if (gameState.gameStatus === 'playing') {
+       if (gameState.storyGuidance && gameState.storyGuidance.setting) {
+           musicEngine.updateSituation(`Exploration: ${gameState.storyGuidance.setting}`);
+       } else {
+           musicEngine.updateSituation("Peaceful exploration.");
+       }
+    } else if (gameState.gameStatus === 'looting') {
+       musicEngine.updateSituation("Victory! Looting treasure.");
+    }
+  }, [gameState.gameStatus, gameState.storyGuidance, musicEngine]);
 
   // NEW STATE for Multiple Saves
   const [savedGames, setSavedGames] = useState<SavedGame[]>([]);
@@ -3745,7 +3891,7 @@ const App = () => {
             skillPools: creationData.skillPools,
             storyLog: [{ text: creationData.initialStory.text, illustration }],
             currentActions: creationData.initialStory.actions,
-            map: { backgroundImage: mapImage, locations: finalLocations },
+            map: { backgroundImage: mapImage, locations: finalLocations, currentLocation: creationData.startingMap.startingLocationName },
             gameStatus: 'playing',
             companions: gameState.companions
         };
@@ -3879,6 +4025,7 @@ const App = () => {
             CURRENT CONDITIONS:
             Time of Day: ${gameState.timeOfDay}
             Weather: ${gameState.weather}
+            Current Location: ${gameState.map?.currentLocation || "Unknown"}
 
             CHARACTER:
             Name: ${gameState.character.name}
@@ -3910,7 +4057,10 @@ const App = () => {
 
             Generate the next part of the story based on the player's action. Update HP/XP if necessary. Provide new actions. Keep the story moving forward.
             If the player spends money (buying items, bribes, services) or finds money, update the 'goldChange' field. (e.g. -50 for spending 50 gold).
-            If the player discovers a new location, add it to the 'mapUpdate.newLocations' array. Also, if the player travels to a location, update 'mapUpdate.updateVisited' with the location's name.
+            
+            **MAP UPDATES (CRITICAL):**
+            1. If the player discovers a new location, add it to 'mapUpdate.newLocations'.
+            2. You MUST populate the 'currentLocation' field with the exact name of the place the player is currently standing. If they traveled, this is the destination. If they didn't move, it's the previous location.
 
             If the player gains or loses gold (e.g., finds a purse, gets paid, gets robbed), strictly output the amount in the 'goldChange' field (positive for gain, negative for loss).
 
@@ -4043,11 +4193,33 @@ const App = () => {
                         });
                     }
                     if (data.mapUpdate.updateVisited) {
-                        const locIndex = updatedMap.locations.findIndex(l => l.name === data.mapUpdate.updateVisited);
+                        const targetName = data.mapUpdate.updateVisited.trim().toLowerCase();
+                        const locIndex = updatedMap.locations.findIndex(l => l.name.trim().toLowerCase() === targetName);
                         if (locIndex !== -1) {
                             updatedMap.locations[locIndex].visited = true;
                         }
                     }
+                    
+                    // --- FIX: Explicit Current Location Update ---
+                    if (data.currentLocation) {
+                        // 1. Try to find the location in the updated map (including any just-added new locations)
+                        const targetName = data.currentLocation.trim().toLowerCase();
+                        const locIndex = updatedMap.locations.findIndex(l => l.name.trim().toLowerCase() === targetName);
+                        
+                        if (locIndex !== -1) {
+                            // Found it! Set as current and ensure visited is true.
+                            updatedMap.currentLocation = updatedMap.locations[locIndex].name;
+                            updatedMap.locations[locIndex].visited = true;
+                        } else {
+                            // Fallback: If AI named a location that isn't in the list (rare but possible), add it dynamically? 
+                            // Or just force the string. Let's force the string to ensure the star appears, 
+                            // but we might miss the coordinates if it wasn't in 'newLocations'.
+                            // Better safety: If not found, we don't set it to avoid a broken star floating nowhere.
+                            // But we can log a warning.
+                            console.warn("AI returned currentLocation not found in map locations:", data.currentLocation);
+                        }
+                    }
+                    // ---------------------------------------------
                 }
 
                 updatedCompanions.forEach(comp => {
@@ -4285,6 +4457,7 @@ const App = () => {
             }
             const victoryIllustration = await generateImage(`${gameState.storyGuidance.setting}. ${victoryData.victoryText}`);
             const victorySegment: StorySegment = { text: victoryData.victoryText || "You are victorious!", illustration: victoryIllustration };
+            const newLoot: Loot = { ...(victoryData.loot || { gold: 0, items: [] }), xpGained: victoryData.xpGained || 0 };
 
             setGameState(prevState => {
                 if (!prevState.character) return prevState;
@@ -4369,13 +4542,46 @@ const App = () => {
             visited: gameState.storyLog.some(segment => segment.text.includes(loc.name))
         }));
 
-        setGameState(prevState => ({
-            ...prevState,
-            map: {
-                backgroundImage: mapImage,
-                locations: newLocations
+        setGameState(prevState => {
+            // Preserve current location if possible, or infer from visited status
+            let currentLoc = prevState.map?.currentLocation;
+            
+            // If we don't have a current location, try to find the last visited one from the new list
+            if (!currentLoc) {
+                // Find the last location in the new list that is marked as visited. 
+                // Since 'newLocations' are just a list, we might rely on the order or check the story log again?
+                // Actually, 'visited' is set based on storyLog inclusion. 
+                // Let's just pick the first 'visited' one if we have nothing else, 
+                // or better, leave it null to avoid false info.
+                // But if we are syncing, we likely want to recover state.
+                const visitedLocs = newLocations.filter(l => l.visited);
+                if (visitedLocs.length > 0) {
+                    // Ideally we'd find the *last* mentioned one, but for now let's just pick one to ensure a star exists if we've been anywhere.
+                    // A better heuristic: Check which location name appears LAST in the storyLog text.
+                    let lastIndex = -1;
+                    let lastLocName = null;
+                    const fullStory = gameState.storyLog.map(s => s.text).join(' ');
+                    
+                    for (const loc of visitedLocs) {
+                        const index = fullStory.lastIndexOf(loc.name);
+                        if (index > lastIndex) {
+                            lastIndex = index;
+                            lastLocName = loc.name;
+                        }
+                    }
+                    if (lastLocName) currentLoc = lastLocName;
+                }
             }
-        }));
+
+            return {
+                ...prevState,
+                map: {
+                    backgroundImage: mapImage,
+                    locations: newLocations,
+                    currentLocation: currentLoc || null
+                }
+            };
+        });
 
     } catch (error) {
         console.error("Map sync failed:", error);
@@ -4963,9 +5169,9 @@ const App = () => {
 
   function renderContent(currentGameState: GameState) {
       switch (currentGameState.gameStatus) {
-          case 'playing': return <GameScreen gameState={currentGameState} onAction={handleAction} onBackToMenu={handleBackToMenu} onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} isLoading={apiIsLoading} onCustomActionClick={() => setIsCustomActionModalOpen(true)} getAlignmentDescriptor={getAlignmentDescriptor} onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))} isMyTurn={isMyTurn} onSyncEquipment={handleSyncEquipment} />;
+          case 'playing': return <GameScreen gameState={currentGameState} onAction={handleAction} onBackToMenu={handleBackToMenu} onLevelUp={() => setGameState(g => ({...g, gameStatus: 'levelUp'}))} isLoading={apiIsLoading} onCustomActionClick={() => setIsCustomActionModalOpen(true)} getAlignmentDescriptor={getAlignmentDescriptor} onOpenGambling={() => setGameState(g => ({...g, gameStatus: 'gambling'}))} isMyTurn={isMyTurn} onSyncEquipment={handleSyncEquipment} isMusicPlaying={isMusicPlaying} onToggleMusic={() => { const newState = !isMusicPlaying; setIsMusicPlaying(newState); musicEngine.toggle(newState); }} />;
           case 'combat': return <CombatScreen gameState={currentGameState} onCombatAction={handleCombatAction} isLoading={apiIsLoading} onBackToMenu={handleBackToMenu} />;
-          case 'levelUp': return <LevelUpScreen character={currentGameState.character!} skillPools={currentGameState.skillPools!} onComplete={handleLevelUpComplete} />;          case 'gambling': return <GamblingScreen gameState={currentGameState} onExit={() => setGameState(g => ({...g, gameStatus: 'playing'}))} onUpdateGold={(amt) => setGameState(p => ({...p, character: {...p.character!, gold: p.character!.gold + amt}}))} onAddItem={(itm) => setGameState(p => ({...p, character: {...p.character!, equipment: {...p.character!.equipment, gear: [...(p.character!.equipment.gear||[]), itm]}}}))} isLoading={apiIsLoading} setIsLoading={setApiIsLoading} />;
+          case 'levelUp': return <LevelUpScreen character={currentGameState.character!} skillPools={currentGameState.skillPools!} onComplete={handleLevelUpComplete} />;          case 'gambling': return <GamblingScreen gameState={currentGameState} onExit={() => setGameState(g => ({...g, gameStatus: 'playing'}))} onUpdateGold={(amt) => setGameState(p => ({...p, character: {...p.character!, gold: p.character!.gold + amt}}))} onAddItem={(itm) => setGameState(p => ({...p, character: {...p.character!, equipment: {...p.character!.equipment, gear: [...(p.character!.equipment.gear||[]), itm]}}}))} onRiddleSolved={(ans) => setGameState(p => ({...p, completedRiddles: [...(p.completedRiddles || []), ans]}))} isLoading={apiIsLoading} setIsLoading={setApiIsLoading} />;
           case 'looting': return <LootScreen loot={currentGameState.loot!} onContinue={() => { setGameState(p => ({...p, gameStatus:'playing', loot:null})); handleAction("Continue story"); }} />;
           case 'transaction': return <TransactionScreen gameState={currentGameState} onExit={handleTransactionExit} onTransaction={handleTransaction} />;          case 'gameOver': return <GameOverScreen onNewGame={() => setView('menu')} />;
           default: return <Loader text="Loading..." />;
